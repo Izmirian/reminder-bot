@@ -1,0 +1,8 @@
+node_modules/
+data/
+.env
+logs/
+.DS_Store
+scripts/launch-*.js
+scripts/run-*.sh
+scripts/start-tunnel.sh
