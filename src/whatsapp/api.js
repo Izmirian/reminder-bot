@@ -149,19 +149,32 @@ export async function uploadMedia(buffer, mimeType) {
     return null;
   }
 
-  const url = `${BASE_URL}/${PHONE_ID}/media`;
-  const ext = mimeType?.includes('png') ? 'png' : 'jpg';
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   const mime = mimeType || 'image/jpeg';
+  const ext = mime.includes('png') ? 'png' : 'jpg';
+  const url = `${BASE_URL}/${PHONE_ID}/media`;
 
-  const formData = new FormData();
-  formData.append('messaging_product', 'whatsapp');
-  formData.append('type', mime);
-  formData.append('file', new Blob([Buffer.from(buffer)], { type: mime }), `image.${ext}`);
+  console.log(`[WA API] uploadMedia: ${buf.length} bytes, mime=${mime}`);
+
+  // Build multipart manually for reliability
+  const boundary = '----WhatsAppMediaBoundary' + Date.now();
+  const parts = [];
+
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="messaging_product"\r\n\r\nwhatsapp`);
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\n${mime}`);
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="image.${ext}"\r\nContent-Type: ${mime}\r\n\r\n`);
+
+  const header = Buffer.from(parts.join('\r\n') + '\r\n');
+  const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+  const body = Buffer.concat([header, buf, footer]);
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${TOKEN}` },
-    body: formData,
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    },
+    body,
   });
 
   if (!res.ok) {
