@@ -56,10 +56,11 @@ Classify the message into one of these intents and return a JSON object:
    - For greetings like "whatsup", "yo", "hey there", etc: respond warmly.
    - For questions: give a brief answer.
 
-3. **"command"** — The user wants to perform a bot action.
+3. **"command"** — The user wants a general bot action (NOT cancel/edit/reschedule — those are "action").
    Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|timezone|digest|help|menu", "args": "optional" }
+   - IMPORTANT: "cancel", "delete", "remove", "edit", "change", "move", "reschedule" referring to existing reminders should ALWAYS use intent "action", NOT "command".
 
-4. **"action"** — The user wants to cancel, edit, or reschedule EXISTING reminders.
+4. **"action"** — The user wants to cancel, edit, or reschedule EXISTING reminders. Use this for ANY message about modifying, deleting, removing, or changing reminders.
    Return: { "intent": "action", "action": "cancel|edit|reschedule", "ids": [1, 2], "newTime": "ISO8601 or null", "newText": "new text or null" }
    - "cancel both" or "cancel all" → ids = all active reminder IDs
    - "cancel the soccer one" → match by text, return its ID
