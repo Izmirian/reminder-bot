@@ -333,12 +333,12 @@ function saveAndConfirm(chatId, parsed, settings) {
 
   const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
   const relTime = relativeTime(parsed.remindAt);
-  const recurLabel = parsed.cronExpr ? '\n🔁 Recurring' : '';
-  const noteLabel = parsed.notes ? `\n📝 Note: ${parsed.notes}` : '';
+  const recurLabel = parsed.cronExpr ? '\nRecurring' : '';
+  const noteLabel = parsed.notes ? `\nNote: ${parsed.notes}` : '';
 
   bot.sendMessage(
     chatId,
-    `✅ *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}${noteLabel}`,
+    `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${noteLabel}`,
     { parse_mode: 'Markdown' }
   );
 }

@@ -51,8 +51,14 @@ Classify the message into one of these intents and return a JSON object:
 1. **"reminder"** — The user wants to set one or more reminders.
    Return: { "intent": "reminder", "reminders": [{ "text": "...", "remindAt": "ISO8601", "cronExpr": "cron or null", "category": "health|work|personal|null", "notes": "extra info or null" }] }
    - If the message contains MULTIPLE reminders, return multiple items in the array.
-   - If a message has a main task AND extra context/notes (e.g., "head to factory at 4:30 also note I need 15k"), create ONE reminder with the task as "text" and the extra info as "notes".
-   - "notes" is for supplementary information related to the reminder — amounts, details, context, things to bring, etc.
+   - If a message has a main task AND extra context/details, create ONE reminder with the task as "text" and the extra info as "notes".
+   - "notes" is for ANY supplementary information: amounts, details, what to bring, context, reasons, etc.
+   - Examples of notes detection:
+     - "remind me to test cad in 2 mins ill be bringing a car" → text="test cad", notes="bringing a car"
+     - "head to factory at 4:30 also note I need 15k" → text="head to factory", notes="need 15k"
+     - "call john at 3pm about the project deadline" → text="call john", notes="about the project deadline"
+     - "buy groceries at 5pm milk eggs bread" → text="buy groceries", notes="milk, eggs, bread"
+   - If additional sentences after the reminder task don't include a new time, they're probably notes, not separate reminders.
    - If you can't determine the time, return: { "intent": "reminder", "needsInfo": "short clarifying question" }
 
 2. **"chat"** — The user is chatting, greeting, asking a question, or making conversation.
