@@ -144,11 +144,19 @@ export async function sendImageMessage(to, imageId, caption) {
  * Upload media to WhatsApp servers for later sending.
  */
 export async function uploadMedia(buffer, mimeType) {
+  if (!buffer) {
+    console.error('[WA API] uploadMedia: no buffer provided');
+    return null;
+  }
+
   const url = `${BASE_URL}/${PHONE_ID}/media`;
+  const ext = mimeType?.includes('png') ? 'png' : 'jpg';
+  const mime = mimeType || 'image/jpeg';
+
   const formData = new FormData();
   formData.append('messaging_product', 'whatsapp');
-  formData.append('type', mimeType);
-  formData.append('file', new Blob([buffer], { type: mimeType }), 'image.jpg');
+  formData.append('type', mime);
+  formData.append('file', new Blob([Buffer.from(buffer)], { type: mime }), `image.${ext}`);
 
   const res = await fetch(url, {
     method: 'POST',
@@ -156,7 +164,11 @@ export async function uploadMedia(buffer, mimeType) {
     body: formData,
   });
 
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    console.error(`[WA API] uploadMedia failed ${res.status}:`, err);
+    return null;
+  }
   const data = await res.json();
   return data.id; // media ID for sending later
 }

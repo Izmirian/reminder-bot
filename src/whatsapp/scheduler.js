@@ -29,6 +29,7 @@ async function fireReminder(reminder) {
     const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes);
 
     // Send image if attached — upload from stored binary, then send
+    console.log(`[WA Fire] id=${reminder.id} media_type=${reminder.media_type} has_data=${!!reminder.media_data} data_len=${reminder.media_data?.length || 0}`);
     if (reminder.media_type === 'wa_image' && reminder.media_data) {
       try {
         const mimeType = reminder.media_id || 'image/jpeg'; // media_id stores mime type

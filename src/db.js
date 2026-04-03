@@ -282,8 +282,8 @@ export async function attachMedia(id, mediaType, mediaId) {
 }
 
 export async function attachMediaWithData(id, mediaType, mediaId, buffer) {
+  console.log(`[DB] attachMediaWithData id=${id} type=${mediaType} mime=${mediaId} buffer_len=${buffer?.length || 0}`);
   if (isPostgres) {
-    let idx = 0;
     await pool.query(
       'UPDATE reminders SET media_type = $1, media_id = $2, media_data = $3 WHERE id = $4',
       [mediaType, mediaId, buffer, id]
