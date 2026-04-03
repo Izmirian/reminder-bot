@@ -62,9 +62,9 @@ export { pendingClearAll, relativeTime, formatTime };
 
 // --- Command handlers ---
 
-export function handleMenu(bot, msg) {
+export async function handleMenu(bot, msg) {
   const chatId = msg.chat.id;
-  const reminders = getActiveReminders(String(chatId));
+  const reminders = await getActiveReminders(String(chatId));
   const count = reminders.length;
   const greeting = count > 0
     ? `You have *${count}* active reminder${count === 1 ? '' : 's'}.`
@@ -121,17 +121,17 @@ export function handleSet(bot, msg) {
   );
 }
 
-export function handleList(bot, msg) {
+export async function handleList(bot, msg) {
   const chatId = msg.chat.id;
-  const reminders = getActiveReminders(String(chatId));
-  const paused = getPausedReminders(String(chatId));
+  const reminders = await getActiveReminders(String(chatId));
+  const paused = await getPausedReminders(String(chatId));
 
   if (reminders.length === 0 && paused.length === 0) {
     bot.sendMessage(chatId, 'You have no reminders.\n\nJust type a reminder to set one!\nExample: "remind me at 3pm to call dentist"');
     return;
   }
 
-  const settings = getSettings(String(chatId));
+  const settings = await getSettings(String(chatId));
   const todayStr = new Date().toISOString().split('T')[0];
 
   const today = [];
@@ -189,7 +189,7 @@ export function handleList(bot, msg) {
   bot.sendMessage(chatId, message, MD);
 }
 
-export function handleCancel(bot, msg, match) {
+export async function handleCancel(bot, msg, match) {
   const chatId = msg.chat.id;
   const idStr = match?.[1]?.trim();
 
@@ -204,7 +204,7 @@ export function handleCancel(bot, msg, match) {
     return;
   }
 
-  const reminders = getActiveReminders(String(chatId));
+  const reminders = await getActiveReminders(String(chatId));
   const reminder = reminders.find(r => r.id === id);
 
   if (!reminder) {
@@ -213,11 +213,11 @@ export function handleCancel(bot, msg, match) {
   }
 
   cancelReminder(id);
-  deactivateReminder(id);
+  await deactivateReminder(id);
   bot.sendMessage(chatId, `✅ Cancelled: "${reminder.text}"`);
 }
 
-export function handleEdit(bot, msg, match) {
+export async function handleEdit(bot, msg, match) {
   const chatId = msg.chat.id;
   const args = match?.[1]?.trim();
 
@@ -234,7 +234,7 @@ export function handleEdit(bot, msg, match) {
 
   const id = parseInt(parts[1], 10);
   const change = parts[2].trim();
-  const reminders = getActiveReminders(String(chatId));
+  const reminders = await getActiveReminders(String(chatId));
   const reminder = reminders.find(r => r.id === id);
 
   if (!reminder) {
@@ -242,7 +242,7 @@ export function handleEdit(bot, msg, match) {
     return;
   }
 
-  const settings = getSettings(String(chatId));
+  const settings = await getSettings(String(chatId));
 
   // Time change: "to 5pm", "to tomorrow 9am"
   if (change.match(/^to\s+/i)) {
@@ -254,12 +254,11 @@ export function handleEdit(bot, msg, match) {
     }
 
     cancelReminder(id);
-    updateReminderTime(id, parsed.remindAt.toISOString());
+    await updateReminderTime(id, parsed.remindAt.toISOString());
 
     // Re-import scheduleReminder dynamically to avoid circular deps
-    import('./scheduler.js').then(sched => {
-      sched.scheduleReminder({ ...reminder, remind_at: parsed.remindAt.toISOString() });
-    });
+    const sched = await import('./scheduler.js');
+    sched.scheduleReminder({ ...reminder, remind_at: parsed.remindAt.toISOString() });
 
     const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
     bot.sendMessage(chatId, `✅ Reminder #${id} updated to *${timeStr}*`, MD);
@@ -267,15 +266,15 @@ export function handleEdit(bot, msg, match) {
   }
 
   // Text change
-  updateReminderText(id, change);
+  await updateReminderText(id, change);
   bot.sendMessage(chatId, `✅ Reminder #${id} updated: "${change}"`);
 }
 
-export function handleToday(bot, msg) {
+export async function handleToday(bot, msg) {
   const chatId = msg.chat.id;
-  const settings = getSettings(String(chatId));
+  const settings = await getSettings(String(chatId));
   const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: settings.timezone });
-  const todays = getTodaysReminders(String(chatId), dateStr);
+  const todays = await getTodaysReminders(String(chatId), dateStr);
 
   if (todays.length === 0) {
     bot.sendMessage(chatId, 'No reminders for today.');
@@ -294,11 +293,11 @@ export function handleToday(bot, msg) {
   bot.sendMessage(chatId, message, MD);
 }
 
-export function handleClearToday(bot, msg) {
+export async function handleClearToday(bot, msg) {
   const chatId = msg.chat.id;
-  const settings = getSettings(String(chatId));
+  const settings = await getSettings(String(chatId));
   const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: settings.timezone });
-  const todays = getTodaysReminders(String(chatId), dateStr);
+  const todays = await getTodaysReminders(String(chatId), dateStr);
 
   if (todays.length === 0) {
     bot.sendMessage(chatId, 'No reminders for today to clear.');
@@ -306,13 +305,13 @@ export function handleClearToday(bot, msg) {
   }
 
   for (const r of todays) cancelReminder(r.id);
-  const count = deactivateTodaysReminders(String(chatId), dateStr);
+  const count = await deactivateTodaysReminders(String(chatId), dateStr);
   bot.sendMessage(chatId, `✅ Cleared ${count} reminder${count === 1 ? '' : 's'} for today.`);
 }
 
-export function handleClearAll(bot, msg) {
+export async function handleClearAll(bot, msg) {
   const chatId = msg.chat.id;
-  const reminders = getActiveReminders(String(chatId));
+  const reminders = await getActiveReminders(String(chatId));
 
   if (reminders.length === 0) {
     bot.sendMessage(chatId, 'You have no active reminders to clear.');
@@ -326,17 +325,17 @@ export function handleClearAll(bot, msg) {
   );
 }
 
-export function handleClearAllConfirm(bot, msg) {
+export async function handleClearAllConfirm(bot, msg) {
   const chatId = msg.chat.id;
-  const reminders = getActiveReminders(String(chatId));
+  const reminders = await getActiveReminders(String(chatId));
   for (const r of reminders) cancelReminder(r.id);
-  const count = deactivateAllReminders(String(chatId));
+  const count = await deactivateAllReminders(String(chatId));
   bot.sendMessage(chatId, `✅ Cleared ${count} reminder${count === 1 ? '' : 's'}.`);
 }
 
-export function handlePause(bot, msg) {
+export async function handlePause(bot, msg) {
   const chatId = msg.chat.id;
-  const reminders = getActiveReminders(String(chatId));
+  const reminders = await getActiveReminders(String(chatId));
 
   if (reminders.length === 0) {
     bot.sendMessage(chatId, 'No active reminders to pause.');
@@ -344,36 +343,35 @@ export function handlePause(bot, msg) {
   }
 
   for (const r of reminders) cancelReminder(r.id);
-  const count = pauseAllReminders(String(chatId));
+  const count = await pauseAllReminders(String(chatId));
   bot.sendMessage(chatId, `⏸️ Paused ${count} reminder${count === 1 ? '' : 's'}.\n\nUse /resume to reactivate.`);
 }
 
-export function handleResume(bot, msg) {
+export async function handleResume(bot, msg) {
   const chatId = msg.chat.id;
-  const paused = getPausedReminders(String(chatId));
+  const paused = await getPausedReminders(String(chatId));
 
   if (paused.length === 0) {
     bot.sendMessage(chatId, 'No paused reminders to resume.');
     return;
   }
 
-  const count = resumeAllReminders(String(chatId));
+  const count = await resumeAllReminders(String(chatId));
 
   // Re-schedule all resumed reminders
-  import('./scheduler.js').then(sched => {
-    const active = getActiveReminders(String(chatId));
-    for (const r of active) sched.scheduleReminder(r);
-  });
+  const sched = await import('./scheduler.js');
+  const active = await getActiveReminders(String(chatId));
+  for (const r of active) sched.scheduleReminder(r);
 
   bot.sendMessage(chatId, `▶️ Resumed ${count} reminder${count === 1 ? '' : 's'}.`);
 }
 
-export function handleTimezone(bot, msg, match) {
+export async function handleTimezone(bot, msg, match) {
   const chatId = msg.chat.id;
   const tz = match?.[1]?.trim();
 
   if (!tz) {
-    const settings = getSettings(String(chatId));
+    const settings = await getSettings(String(chatId));
     bot.sendMessage(chatId, `Your timezone: *${settings.timezone}*\n\nTo change: /timezone Asia/Dubai`, MD);
     return;
   }
@@ -385,16 +383,16 @@ export function handleTimezone(bot, msg, match) {
     return;
   }
 
-  setTimezone(String(chatId), tz);
+  await setTimezone(String(chatId), tz);
   bot.sendMessage(chatId, `✅ Timezone set to *${tz}*`, MD);
 }
 
-export function handleDigest(bot, msg, match) {
+export async function handleDigest(bot, msg, match) {
   const chatId = msg.chat.id;
   const args = match?.[1]?.trim()?.split(/\s+/) || [];
 
   if (args.length === 0 || !args[0]) {
-    const settings = getSettings(String(chatId));
+    const settings = await getSettings(String(chatId));
     const status = settings.daily_digest ? `ON at ${settings.digest_time}` : 'OFF';
     bot.sendMessage(chatId, `Daily digest: *${status}*\n\nUsage: /digest on [HH:MM] | /digest off`, MD);
     return;
@@ -402,7 +400,7 @@ export function handleDigest(bot, msg, match) {
 
   const toggle = args[0].toLowerCase();
   if (toggle === 'off') {
-    setDailyDigest(String(chatId), false);
+    await setDailyDigest(String(chatId), false);
     bot.sendMessage(chatId, '✅ Daily digest turned off.');
     return;
   }
@@ -413,7 +411,7 @@ export function handleDigest(bot, msg, match) {
       bot.sendMessage(chatId, 'Time format should be HH:MM (e.g., 08:00, 21:30)');
       return;
     }
-    setDailyDigest(String(chatId), true, time);
+    await setDailyDigest(String(chatId), true, time);
     bot.sendMessage(chatId, `✅ Daily digest enabled at *${time}*`, MD);
     return;
   }
@@ -423,20 +421,19 @@ export function handleDigest(bot, msg, match) {
 
 // --- Undo ---
 
-export function handleUndo(bot, msg) {
+export async function handleUndo(bot, msg) {
   const chatId = msg.chat.id;
-  const last = getLastDeactivated(String(chatId));
+  const last = await getLastDeactivated(String(chatId));
 
   if (!last) {
     bot.sendMessage(chatId, 'Nothing to undo.');
     return;
   }
 
-  reactivateReminder(last.id);
+  await reactivateReminder(last.id);
 
-  import('./scheduler.js').then(sched => {
-    sched.scheduleReminder({ ...last, active: 1 });
-  });
+  const sched = await import('./scheduler.js');
+  sched.scheduleReminder({ ...last, active: 1 });
 
   bot.sendMessage(chatId, `↩️ Restored: "${last.text}"`);
 }
@@ -456,10 +453,10 @@ export function getLastCreated(chatId) {
 
 // --- Weekly summary ---
 
-export function handleWeeklySummary(bot, msg) {
+export async function handleWeeklySummary(bot, msg) {
   const chatId = msg.chat.id;
-  const stats = getWeeklyStats(String(chatId));
-  const active = getActiveReminders(String(chatId));
+  const stats = await getWeeklyStats(String(chatId));
+  const active = await getActiveReminders(String(chatId));
   const total = stats.completed + stats.snoozed + stats.missed;
 
   let msg_ = '📊 *Weekly Summary*\n\n';

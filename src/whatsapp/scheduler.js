@@ -2,7 +2,7 @@
  * WhatsApp-specific scheduler — reuses the same DB but sends via WhatsApp API.
  */
 import cron from 'node-cron';
-import { sendReminderMessage, sendTextMessage, sendImageMessage } from './api.js';
+import { sendReminderMessage, sendTextMessage, sendImageMessage, uploadMedia } from './api.js';
 import {
   getAllActiveReminders,
   deactivateReminder,
@@ -25,32 +25,37 @@ function getNextCronDate() {
 
 async function fireReminder(reminder) {
   try {
-    const settings = getSettings(reminder.chat_id);
+    const settings = await getSettings(reminder.chat_id);
     const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes);
 
-    // Send image first if attached
-    if (reminder.media_type === 'wa_image' && reminder.media_id) {
+    // Send image if attached — upload from stored binary, then send
+    if (reminder.media_type === 'wa_image' && reminder.media_data) {
       try {
-        await sendImageMessage(reminder.chat_id, reminder.media_id, contextMsg);
+        const mimeType = reminder.media_id || 'image/jpeg'; // media_id stores mime type
+        const freshMediaId = await uploadMedia(reminder.media_data, mimeType);
+        if (freshMediaId) {
+          await sendImageMessage(reminder.chat_id, freshMediaId, contextMsg);
+        } else {
+          await sendReminderMessage(reminder.chat_id, contextMsg + '\n(photo could not be loaded)', reminder.id);
+        }
       } catch (imgErr) {
         console.error(`[WhatsApp] Failed to send image for reminder ${reminder.id}:`, imgErr.message);
-        // Fallback to text-only
         await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
       }
     } else {
       await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
     }
-    markReminderFired(reminder.id);
+    await markReminderFired(reminder.id);
   } catch (err) {
     console.error(`[WhatsApp] Failed to send reminder ${reminder.id}:`, err.message);
   }
 
   if (!reminder.cron_expr) {
-    deactivateReminder(reminder.id);
+    await deactivateReminder(reminder.id);
     activeJobs.delete(reminder.id);
   } else {
     const nextRun = getNextCronDate();
-    updateReminderTime(reminder.id, nextRun.toISOString());
+    await updateReminderTime(reminder.id, nextRun.toISOString());
   }
 }
 
@@ -91,10 +96,11 @@ export function cancelAllReminders(chatId) {
   }
 }
 
-export function snoozeReminder(reminderId, minutes) {
+export async function snoozeReminder(reminderId, minutes) {
   cancelReminder(reminderId);
   const newTime = new Date(Date.now() + minutes * 60 * 1000);
-  const full = getAllActiveReminders().find(r => r.id === reminderId);
+  const allActive = await getAllActiveReminders();
+  const full = allActive.find(r => r.id === reminderId);
   if (full) {
     full.remind_at = newTime.toISOString();
     full.cron_expr = null;
@@ -105,8 +111,8 @@ export function snoozeReminder(reminderId, minutes) {
 /**
  * Load all active WhatsApp reminders (chat_id is a phone number, not a Telegram numeric ID).
  */
-export function loadWhatsAppReminders() {
-  const reminders = getAllActiveReminders();
+export async function loadWhatsAppReminders() {
+  const reminders = await getAllActiveReminders();
   // WhatsApp chat_ids are phone numbers (digits, 10+ chars)
   const waReminders = reminders.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id));
 
@@ -137,7 +143,7 @@ export function setupWhatsAppDigest() {
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const dateStr = now.toISOString().split('T')[0];
 
-    const allReminders = getAllActiveReminders();
+    const allReminders = await getAllActiveReminders();
     const waChatIds = [...new Set(
       allReminders
         .filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id))
@@ -145,10 +151,10 @@ export function setupWhatsAppDigest() {
     )];
 
     for (const chatId of waChatIds) {
-      const settings = getSettings(chatId);
+      const settings = await getSettings(chatId);
       if (!settings.daily_digest || settings.digest_time !== currentTime) continue;
 
-      const todaysReminders = getTodaysReminders(chatId, dateStr);
+      const todaysReminders = await getTodaysReminders(chatId, dateStr);
       if (todaysReminders.length === 0) continue;
 
       let message = '📋 *Today\'s Reminders:*\n\n';

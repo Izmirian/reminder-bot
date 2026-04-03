@@ -70,8 +70,8 @@ function markSuggested(chatId, patternKey) {
  * Detect recurring patterns from completed reminders.
  * Returns array of { text, dayOfWeek, hour, minute, suggestedCron } or empty array.
  */
-export function detectRecurringPattern(chatId) {
-  const completed = getCompletedReminders(chatId, 28);
+export async function detectRecurringPattern(chatId) {
+  const completed = await getCompletedReminders(chatId, 28);
   if (completed.length < 3) return [];
 
   const clusters = clusterByText(completed);

@@ -2,6 +2,13 @@
  * Handles incoming WhatsApp messages — parses reminders, commands, and button replies.
  */
 import { sendTextMessage, sendReminderMessage, getMediaUrl, downloadMedia, uploadMedia, sendImageMessage } from './api.js';
+import { writeFileSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const MEDIA_DIR = join(__dirname, '..', '..', 'data', 'media');
+mkdirSync(MEDIA_DIR, { recursive: true });
 import { parseReminderSmart, parseReminder, detectCategory } from '../parser.js';
 import { classifyIntent } from '../ai.js';
 import {
@@ -10,7 +17,7 @@ import {
   resumeAllReminders, getPausedReminders, getSettings, setTimezone,
   setDailyDigest, updateReminderText, updateReminderTime,
   getTodaysReminders, getLastDeactivated, reactivateReminder,
-  getWeeklyStats, attachMedia, getLastReminder, addNoteToReminder,
+  getWeeklyStats, attachMedia, attachMediaWithData, getLastReminder, addNoteToReminder,
   snoozeReminder as dbSnooze,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
@@ -71,14 +78,14 @@ export async function handleTextMessage(from, text) {
   if (pendingPhotos.has(from)) {
     const photo = pendingPhotos.get(from);
     pendingPhotos.delete(from);
-    const settings = getSettings(from);
+    const settings = await getSettings(from);
     const aiResult = await classifyIntent(`remind me ${text.trim()} to ${photo.text}`, settings.timezone, new Date().toISOString(), []);
     if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
       const r = aiResult.reminders[0];
-      const id = createReminderAndSchedule(from, {
+      const id = await createReminderAndSchedule(from, {
         text: photo.text, remindAt: new Date(r.remindAt), cronExpr: null, category: null, notes: null,
       }, settings);
-      attachMedia(id, 'wa_image', photo.mediaId);
+      await attachMediaWithData(id, 'wa_image', photo.mimeType || 'image/jpeg', photo.buffer);
       const timeStr = formatTime(new Date(r.remindAt).toISOString(), settings.timezone);
       const relTime = relativeTime(new Date(r.remindAt));
       return sendTextMessage(from, `✅ *${photo.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
@@ -91,7 +98,7 @@ export async function handleTextMessage(from, text) {
     const ctx = pendingClarification.get(from);
     pendingClarification.delete(from);
     const combined = `${ctx.originalText} (${text.trim()})`;
-    const settings = getSettings(from);
+    const settings = await getSettings(from);
     const parsed = await parseReminderSmart(combined, settings.timezone);
     if (parsed && !parsed.needsInfo && parsed.remindAt) {
       return saveAndConfirm(from, parsed, settings);
@@ -115,8 +122,8 @@ export async function handleTextMessage(from, text) {
   if (lower.startsWith('/digest') || lower.startsWith('digest ')) return handleDigest(from, text.trim());
 
   // --- AI-first intent classification ---
-  const settings = getSettings(from);
-  const activeRems = getActiveReminders(from);
+  const settings = await getSettings(from);
+  const activeRems = await getActiveReminders(from);
   const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString(), activeRems);
 
   if (aiResult) {
@@ -148,7 +155,7 @@ export async function handleTextMessage(from, text) {
         const names = [];
         for (const id of ids) {
           const r = activeRems.find(rem => rem.id === id);
-          if (r) { cancelReminder(id); deactivateReminder(id); names.push(r.text); }
+          if (r) { cancelReminder(id); await deactivateReminder(id); names.push(r.text); }
         }
         if (names.length > 0) {
           return sendTextMessage(from, `✅ Cancelled: ${names.map(n => `"${n}"`).join(', ')}`);
@@ -160,7 +167,7 @@ export async function handleTextMessage(from, text) {
           const r = activeRems.find(rem => rem.id === id);
           if (r && aiResult.newTime) {
             cancelReminder(id);
-            updateReminderTime(id, new Date(aiResult.newTime).toISOString());
+            await updateReminderTime(id, new Date(aiResult.newTime).toISOString());
             scheduleReminder({ ...r, remind_at: new Date(aiResult.newTime).toISOString() });
             const timeStr = new Date(aiResult.newTime).toLocaleString('en-US', {
               timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
@@ -175,7 +182,7 @@ export async function handleTextMessage(from, text) {
         for (const id of ids) {
           const r = activeRems.find(rem => rem.id === id);
           if (r && aiResult.newText) {
-            updateReminderText(id, aiResult.newText);
+            await updateReminderText(id, aiResult.newText);
             await sendTextMessage(from, `✅ Updated #${id}: "${aiResult.newText}"`);
           }
         }
@@ -218,9 +225,9 @@ export async function handleTextMessage(from, text) {
 }
 
 async function handleUndo(from) {
-  const last = getLastDeactivated(from);
+  const last = await getLastDeactivated(from);
   if (!last) return sendTextMessage(from, 'Nothing to undo.');
-  reactivateReminder(last.id);
+  await reactivateReminder(last.id);
   scheduleReminder({ ...last, active: 1 });
   return sendTextMessage(from, `↩️ Restored: "${last.text}"`);
 }
@@ -228,13 +235,13 @@ async function handleUndo(from) {
 async function handleRepeat(from) {
   const last = lastCreated.get(from);
   if (!last) return sendTextMessage(from, 'Nothing to repeat. Set a reminder first!');
-  const settings = getSettings(from);
+  const settings = await getSettings(from);
   return saveAndConfirm(from, last, settings);
 }
 
 async function handleWeekly(from) {
-  const stats = getWeeklyStats(from);
-  const active = getActiveReminders(from);
+  const stats = await getWeeklyStats(from);
+  const active = await getActiveReminders(from);
   const total = stats.completed + stats.snoozed + stats.missed;
 
   let msg = '📊 *Weekly Summary*\n\n';
@@ -256,7 +263,7 @@ async function handleWeekly(from) {
 
 async function saveAndConfirm(from, parsed, settings) {
   lastCreated.set(from, parsed);
-  const id = createReminder({
+  const id = await createReminder({
     chatId: from, text: parsed.text, remindAt: parsed.remindAt.toISOString(),
     cronExpr: parsed.cronExpr, timezone: settings.timezone, category: parsed.category,
   });
@@ -285,12 +292,12 @@ export async function handleButtonReply(from, buttonId) {
     const reminderId = parseInt(idStr, 10);
     const minutes = parseInt(minsStr, 10);
 
-    dbSnooze(reminderId, new Date(Date.now() + minutes * 60 * 1000).toISOString());
-    schedSnooze(reminderId, minutes);
-    clearIgnoredSince(reminderId);
+    await dbSnooze(reminderId, new Date(Date.now() + minutes * 60 * 1000).toISOString());
+    await schedSnooze(reminderId, minutes);
+    await clearIgnoredSince(reminderId);
 
-    incrementSnoozeCount(reminderId);
-    const count = getSnoozeCount(reminderId);
+    await incrementSnoozeCount(reminderId);
+    const count = await getSnoozeCount(reminderId);
 
     const label = minutes >= 60 ? `${minutes / 60} hour(s)` : `${minutes} minutes`;
 
@@ -305,20 +312,20 @@ export async function handleButtonReply(from, buttonId) {
   if (buttonId.startsWith('done:')) {
     const reminderId = parseInt(buttonId.split(':')[1], 10);
 
-    const reminder = getReminder(reminderId);
+    const reminder = await getReminder(reminderId);
     if (reminder) {
-      logCompletedReminder({ chatId: from, text: reminder.text, remindAt: reminder.remind_at });
+      await logCompletedReminder({ chatId: from, text: reminder.text, remindAt: reminder.remind_at });
     }
 
     cancelReminder(reminderId);
-    deactivateReminder(reminderId);
-    resetSnoozeCount(reminderId);
-    clearIgnoredSince(reminderId);
+    await deactivateReminder(reminderId);
+    await resetSnoozeCount(reminderId);
+    await clearIgnoredSince(reminderId);
 
     await sendTextMessage(from, '✅ Done!');
 
     // Check for recurring patterns
-    const patterns = detectRecurringPattern(from);
+    const patterns = await detectRecurringPattern(from);
     for (const p of patterns) {
       const timeStr = `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
       await sendTextMessage(from,
@@ -332,7 +339,7 @@ export async function handleButtonReply(from, buttonId) {
 // --- Feature handlers (unchanged) ---
 
 async function sendMenu(to) {
-  const reminders = getActiveReminders(to);
+  const reminders = await getActiveReminders(to);
   const count = reminders.length;
   const greeting = count > 0
     ? `You have *${count}* active reminder${count === 1 ? '' : 's'}.`
@@ -357,13 +364,13 @@ async function sendHelp(to) {
 }
 
 async function sendList(to) {
-  const reminders = getActiveReminders(to);
-  const paused = getPausedReminders(to);
+  const reminders = await getActiveReminders(to);
+  const paused = await getPausedReminders(to);
   if (reminders.length === 0 && paused.length === 0) {
     return sendTextMessage(to, 'You have no reminders.\nJust type a reminder to set one!');
   }
 
-  const settings = getSettings(to);
+  const settings = await getSettings(to);
   const todayStr = new Date().toISOString().split('T')[0];
   const today = [], upcoming = [], recurring = [];
 
@@ -410,10 +417,10 @@ async function sendList(to) {
 }
 
 async function sendTodaysList(from) {
-  const settings = getSettings(from);
+  const settings = await getSettings(from);
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-CA', { timeZone: settings.timezone }); // YYYY-MM-DD
-  const todays = getTodaysReminders(from, dateStr);
+  const todays = await getTodaysReminders(from, dateStr);
 
   if (todays.length === 0) return sendTextMessage(from, 'No reminders for today.');
 
@@ -430,28 +437,28 @@ async function sendTodaysList(from) {
 }
 
 async function handleClearToday(from) {
-  const settings = getSettings(from);
+  const settings = await getSettings(from);
   const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: settings.timezone });
-  const todays = getTodaysReminders(from, dateStr);
+  const todays = await getTodaysReminders(from, dateStr);
 
   if (todays.length === 0) return sendTextMessage(from, 'No reminders for today to clear.');
 
   for (const r of todays) cancelReminder(r.id);
-  const count = deactivateTodaysReminders(from, dateStr);
+  const count = await deactivateTodaysReminders(from, dateStr);
   return sendTextMessage(from, `✅ Cleared ${count} reminder${count === 1 ? '' : 's'} for today.`);
 }
 
 async function handleClearAll(from) {
-  const reminders = getActiveReminders(from);
+  const reminders = await getActiveReminders(from);
   if (reminders.length === 0) return sendTextMessage(from, 'You have no active reminders to clear.');
   pendingClearAll.add(from);
   return sendTextMessage(from, `⚠️ Are you sure you want to clear all *${reminders.length}* reminder${reminders.length === 1 ? '' : 's'}?\n\nReply *YES* to confirm.`);
 }
 
 async function doClearAll(from) {
-  const reminders = getActiveReminders(from);
+  const reminders = await getActiveReminders(from);
   for (const r of reminders) cancelReminder(r.id);
-  const count = deactivateAllReminders(from);
+  const count = await deactivateAllReminders(from);
   return sendTextMessage(from, `✅ Cleared ${count} reminder${count === 1 ? '' : 's'}.`);
 }
 
@@ -459,11 +466,11 @@ async function handleCancel(to, text) {
   const match = text.match(/cancel\s+(\d+)/i);
   if (!match) return sendTextMessage(to, 'Usage: *cancel 3*\nSend *view* to see reminder IDs.');
   const id = parseInt(match[1], 10);
-  const reminders = getActiveReminders(to);
+  const reminders = await getActiveReminders(to);
   const reminder = reminders.find(r => r.id === id);
   if (!reminder) return sendTextMessage(to, `Reminder #${id} not found.`);
   cancelReminder(id);
-  deactivateReminder(id);
+  await deactivateReminder(id);
   return sendTextMessage(to, `✅ Cancelled: "${reminder.text}"`);
 }
 
@@ -472,36 +479,36 @@ async function handleEdit(to, text) {
   if (!match) return sendTextMessage(to, 'Usage:\n• *edit 3 to 5pm* — change time\n• *edit 3 buy groceries* — change text');
   const id = parseInt(match[1], 10);
   const change = match[2].trim();
-  const reminders = getActiveReminders(to);
+  const reminders = await getActiveReminders(to);
   const reminder = reminders.find(r => r.id === id);
   if (!reminder) return sendTextMessage(to, `Reminder #${id} not found.`);
-  const settings = getSettings(to);
+  const settings = await getSettings(to);
   if (change.match(/^to\s+/i)) {
     const timeText = change.replace(/^to\s+/i, '');
     const parsed = parseReminder(`remind me at ${timeText} to placeholder`, settings.timezone);
     if (!parsed) return sendTextMessage(to, `Couldn't understand "${timeText}" as a time.`);
     cancelReminder(id);
-    updateReminderTime(id, parsed.remindAt.toISOString());
+    await updateReminderTime(id, parsed.remindAt.toISOString());
     scheduleReminder({ ...reminder, remind_at: parsed.remindAt.toISOString() });
     return sendTextMessage(to, `✅ Reminder #${id} updated to *${formatTime(parsed.remindAt.toISOString(), settings.timezone)}*`);
   }
-  updateReminderText(id, change);
+  await updateReminderText(id, change);
   return sendTextMessage(to, `✅ Reminder #${id} updated: "${change}"`);
 }
 
 async function handlePause(from) {
-  const reminders = getActiveReminders(from);
+  const reminders = await getActiveReminders(from);
   if (reminders.length === 0) return sendTextMessage(from, 'No active reminders to pause.');
   for (const r of reminders) cancelReminder(r.id);
-  const count = pauseAllReminders(from);
+  const count = await pauseAllReminders(from);
   return sendTextMessage(from, `⏸️ Paused ${count} reminder${count === 1 ? '' : 's'}.\nSend *resume* to reactivate.`);
 }
 
 async function handleResume(from) {
-  const paused = getPausedReminders(from);
+  const paused = await getPausedReminders(from);
   if (paused.length === 0) return sendTextMessage(from, 'No paused reminders to resume.');
-  const count = resumeAllReminders(from);
-  const active = getActiveReminders(from);
+  const count = await resumeAllReminders(from);
+  const active = await getActiveReminders(from);
   for (const r of active) scheduleReminder(r);
   return sendTextMessage(from, `▶️ Resumed ${count} reminder${count === 1 ? '' : 's'}.`);
 }
@@ -509,27 +516,27 @@ async function handleResume(from) {
 async function handleTimezone(to, text) {
   const match = text.match(/timezone\s+(.+)/i);
   if (!match) {
-    const settings = getSettings(to);
+    const settings = await getSettings(to);
     return sendTextMessage(to, `Your timezone: *${settings.timezone}*\n\nTo change: *timezone Asia/Dubai*`);
   }
   const tz = match[1].trim();
   try { Intl.DateTimeFormat(undefined, { timeZone: tz }); } catch {
     return sendTextMessage(to, `"${tz}" is not valid.\nExamples: America/New_York, Europe/London, Asia/Dubai`);
   }
-  setTimezone(to, tz);
+  await setTimezone(to, tz);
   return sendTextMessage(to, `✅ Timezone set to *${tz}*`);
 }
 
 async function handleDigest(to, text) {
   const match = text.match(/digest\s+(on|off)(?:\s+(\d{2}:\d{2}))?/i);
   if (!match) {
-    const settings = getSettings(to);
+    const settings = await getSettings(to);
     const status = settings.daily_digest ? `ON at ${settings.digest_time}` : 'OFF';
     return sendTextMessage(to, `Daily digest: *${status}*\n\nUsage: *digest on* [HH:MM] | *digest off*`);
   }
-  if (match[1].toLowerCase() === 'off') { setDailyDigest(to, false); return sendTextMessage(to, '✅ Daily digest turned off.'); }
+  if (match[1].toLowerCase() === 'off') { await setDailyDigest(to, false); return sendTextMessage(to, '✅ Daily digest turned off.'); }
   const time = match[2] || '08:00';
-  setDailyDigest(to, true, time);
+  await setDailyDigest(to, true, time);
   return sendTextMessage(to, `✅ Daily digest enabled at *${time}*`);
 }
 
@@ -537,55 +544,47 @@ async function handleDigest(to, text) {
 
 export async function handleImageMessage(from, waMediaId, caption, mimeType) {
   try {
-    const settings = getSettings(from);
+    const settings = await getSettings(from);
 
-    // Download the image and re-upload to get a persistent media ID
+    // Download image immediately and store binary for later
+    let imageBuffer = null;
     const mediaUrl = await getMediaUrl(waMediaId);
-    let storedMediaId = waMediaId; // fallback to original ID
-
     if (mediaUrl) {
-      const buffer = await downloadMedia(mediaUrl);
-      if (buffer) {
-        const uploaded = await uploadMedia(buffer, mimeType);
-        if (uploaded) storedMediaId = uploaded;
-      }
+      imageBuffer = await downloadMedia(mediaUrl);
     }
 
     if (caption) {
-      // Photo with caption — try to parse as reminder
-      const activeRems = getActiveReminders(from);
+      const activeRems = await getActiveReminders(from);
       const aiResult = await classifyIntent(caption, settings.timezone, new Date().toISOString(), activeRems);
 
       if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
         const r = aiResult.reminders[0];
-        const parsed = {
+        const id = await createReminderAndSchedule(from, {
           text: r.text, remindAt: new Date(r.remindAt), cronExpr: r.cronExpr || null,
           category: r.category || null, notes: r.notes || null,
-        };
-        const id = createReminderAndSchedule(from, parsed, settings);
-        attachMedia(id, 'wa_image', storedMediaId);
-        const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
-        const relTime = relativeTime(parsed.remindAt);
-        return sendTextMessage(from, `✅ *${parsed.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
+        }, settings);
+        await attachMediaWithData(id, 'wa_image', mimeType, imageBuffer);
+        const timeStr = formatTime(new Date(r.remindAt).toISOString(), settings.timezone);
+        const relTime = relativeTime(new Date(r.remindAt));
+        return sendTextMessage(from, `✅ *${r.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
       }
 
-      // Try chrono fallback
       const parsed = parseReminder(caption, settings.timezone);
       if (parsed) {
-        const id = createReminderAndSchedule(from, parsed, settings);
-        attachMedia(id, 'wa_image', storedMediaId);
+        const id = await createReminderAndSchedule(from, parsed, settings);
+        await attachMediaWithData(id, 'wa_image', mimeType, imageBuffer);
         const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
         const relTime = relativeTime(parsed.remindAt);
         return sendTextMessage(from, `✅ *${parsed.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
       }
 
-      // Can't parse — store photo, ask when
-      pendingPhotos.set(from, { mediaId: storedMediaId, text: caption });
+      // Store in pending with buffer
+      pendingPhotos.set(from, { buffer: imageBuffer, mimeType, text: caption });
       return sendTextMessage(from, 'Got the photo! When should I remind you?');
     }
 
-    // No caption — always ask when to remind
-    pendingPhotos.set(from, { mediaId: storedMediaId, text: 'Photo reminder' });
+    // No caption — ask
+    pendingPhotos.set(from, { buffer: imageBuffer, mimeType, text: 'Photo reminder' });
     return sendTextMessage(from, 'Got the photo! When should I remind you about it?');
   } catch (err) {
     console.error('[WA Image error]', err);
@@ -594,13 +593,13 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
 }
 
 // Helper to create + schedule a reminder and return the ID
-function createReminderAndSchedule(from, parsed, settings) {
-  const id = createReminder({
+async function createReminderAndSchedule(from, parsed, settings) {
+  const id = await createReminder({
     chatId: from, text: parsed.text, remindAt: parsed.remindAt.toISOString(),
     cronExpr: parsed.cronExpr, timezone: settings.timezone, category: parsed.category,
   });
-  if (parsed.notes) addNoteToReminder(id, parsed.notes);
-  const reminder = getReminder(id);
+  if (parsed.notes) await addNoteToReminder(id, parsed.notes);
+  const reminder = await getReminder(id);
   scheduleReminder(reminder);
   return id;
 }

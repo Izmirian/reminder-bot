@@ -19,7 +19,7 @@ for (const key of required) {
 
 const app = createWebhookServer();
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🟢 WhatsApp bot webhook listening on port ${PORT}`);
   console.log(`   Webhook URL: http://localhost:${PORT}/webhook`);
   console.log('');
@@ -28,7 +28,7 @@ app.listen(PORT, () => {
   console.log('   Then set the ngrok HTTPS URL as your webhook in Meta Developer portal.');
   console.log('');
 
-  loadWhatsAppReminders();
+  await loadWhatsAppReminders();
   setupWhatsAppDigest();
 
   console.log('🤖 WhatsApp Reminder Bot is running!');

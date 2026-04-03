@@ -37,7 +37,7 @@ if (!TOKEN) {
 const bot = new TelegramBot(TOKEN, { polling: true });
 initScheduler(bot);
 
-loadAllReminders();
+await loadAllReminders();
 setupDailyDigest();
 
 console.log('🤖 Telegram Reminder bot is running...');
@@ -75,13 +75,13 @@ bot.on('callback_query', async (query) => {
     const reminderId = parseInt(idStr, 10);
     const minutes = parseInt(minsStr, 10);
 
-    dbSnooze(reminderId, new Date(Date.now() + minutes * 60 * 1000).toISOString());
-    schedSnooze(reminderId, minutes);
-    clearIgnoredSince(reminderId);
+    await dbSnooze(reminderId, new Date(Date.now() + minutes * 60 * 1000).toISOString());
+    await schedSnooze(reminderId, minutes);
+    await clearIgnoredSince(reminderId);
 
     // Smart rescheduling — track snooze count
-    incrementSnoozeCount(reminderId);
-    const count = getSnoozeCount(reminderId);
+    await incrementSnoozeCount(reminderId);
+    const count = await getSnoozeCount(reminderId);
 
     const label = minutes >= 60 ? `${minutes / 60} hour(s)` : `${minutes} minutes`;
     await bot.answerCallbackQuery(query.id, { text: `Snoozed for ${label}` });
@@ -103,9 +103,9 @@ bot.on('callback_query', async (query) => {
     const reminderId = parseInt(data.split(':')[1], 10);
 
     // Log completion before deactivating
-    const reminder = getReminder(reminderId);
+    const reminder = await getReminder(reminderId);
     if (reminder) {
-      logCompletedReminder({
+      await logCompletedReminder({
         chatId: String(chatId),
         text: reminder.text,
         remindAt: reminder.remind_at,
@@ -113,9 +113,9 @@ bot.on('callback_query', async (query) => {
     }
 
     cancelReminder(reminderId);
-    deactivateReminder(reminderId);
-    resetSnoozeCount(reminderId);
-    clearIgnoredSince(reminderId);
+    await deactivateReminder(reminderId);
+    await resetSnoozeCount(reminderId);
+    await clearIgnoredSince(reminderId);
 
     await bot.answerCallbackQuery(query.id, { text: 'Marked as done!' });
     await bot.editMessageText(
@@ -124,7 +124,7 @@ bot.on('callback_query', async (query) => {
     );
 
     // Check for recurring patterns
-    const patterns = detectRecurringPattern(String(chatId));
+    const patterns = await detectRecurringPattern(String(chatId));
     for (const p of patterns) {
       const timeStr = `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
       bot.sendMessage(chatId,
@@ -154,13 +154,13 @@ bot.on('message', async (msg) => {
     try {
       if (caption) {
         // Photo with caption — try to create a reminder
-        const settings = getSettings(String(chatId));
-        const activeRems = getActiveReminders(String(chatId));
+        const settings = await getSettings(String(chatId));
+        const activeRems = await getActiveReminders(String(chatId));
         const aiResult = await classifyIntent(caption, settings.timezone, new Date().toISOString(), activeRems);
 
         if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
           const r = aiResult.reminders[0];
-          saveAndConfirm(chatId, {
+          await saveAndConfirm(chatId, {
             text: r.text, remindAt: new Date(r.remindAt), cronExpr: r.cronExpr || null,
             category: r.category || null, notes: r.notes || null,
             mediaType: 'reply', mediaId: String(msgId),
@@ -173,7 +173,7 @@ bot.on('message', async (msg) => {
         if (parsed) {
           parsed.mediaType = 'reply';
           parsed.mediaId = String(msgId);
-          saveAndConfirm(chatId, parsed, settings);
+          await saveAndConfirm(chatId, parsed, settings);
           return;
         }
 
@@ -203,11 +203,11 @@ bot.on('message', async (msg) => {
   if (pendingPhotos.has(String(chatId))) {
     const photo = pendingPhotos.get(String(chatId));
     pendingPhotos.delete(String(chatId));
-    const settings = getSettings(String(chatId));
+    const settings = await getSettings(String(chatId));
     const aiResult = await classifyIntent(`remind me ${text} to ${photo.text}`, settings.timezone, new Date().toISOString(), []);
     if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
       const r = aiResult.reminders[0];
-      saveAndConfirm(chatId, {
+      await saveAndConfirm(chatId, {
         text: photo.text,
         remindAt: new Date(r.remindAt),
         cronExpr: null,
@@ -227,7 +227,7 @@ bot.on('message', async (msg) => {
   if (pendingClearAll.has(String(chatId))) {
     pendingClearAll.delete(String(chatId));
     if (lower === 'yes') {
-      handleClearAllConfirm(bot, msg);
+      await handleClearAllConfirm(bot, msg);
       return;
     }
     bot.sendMessage(chatId, 'Clear all cancelled.');
@@ -239,18 +239,18 @@ bot.on('message', async (msg) => {
     const ctx = pendingClarification.get(String(chatId));
     pendingClarification.delete(String(chatId));
     const combined = `${ctx.originalText} (${text})`;
-    const settings = getSettings(String(chatId));
+    const settings = await getSettings(String(chatId));
     const parsed = await parseReminderSmart(combined, settings.timezone);
     if (parsed && !parsed.needsInfo && parsed.remindAt) {
-      return saveAndConfirm(chatId, parsed, settings);
+      return await saveAndConfirm(chatId, parsed, settings);
     }
     bot.sendMessage(chatId, "Hmm, I still couldn't figure that out. Try: \"remind me at 3pm to call dentist\"");
     return;
   }
 
   // --- AI-first intent classification ---
-  const settings = getSettings(String(chatId));
-  const activeReminders = getActiveReminders(String(chatId));
+  const settings = await getSettings(String(chatId));
+  const activeReminders = await getActiveReminders(String(chatId));
   const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString(), activeReminders);
 
   if (aiResult) {
@@ -261,24 +261,24 @@ bot.on('message', async (msg) => {
 
     if (aiResult.intent === 'command') {
       const cmd = aiResult.command;
-      if (cmd === 'menu' || cmd === 'start') { handleMenu(bot, msg); return; }
-      if (cmd === 'list') { handleList(bot, msg); return; }
+      if (cmd === 'menu' || cmd === 'start') { await handleMenu(bot, msg); return; }
+      if (cmd === 'list') { await handleList(bot, msg); return; }
       if (cmd === 'help') { handleHelp(bot, msg); return; }
-      if (cmd === 'today') { handleToday(bot, msg); return; }
-      if (cmd === 'clear_all') { handleClearAll(bot, msg); return; }
-      if (cmd === 'clear_today') { handleClearToday(bot, msg); return; }
-      if (cmd === 'pause') { handlePause(bot, msg); return; }
-      if (cmd === 'resume') { handleResume(bot, msg); return; }
-      if (cmd === 'undo') { handleUndo(bot, msg); return; }
-      if (cmd === 'summary') { handleWeeklySummary(bot, msg); return; }
+      if (cmd === 'today') { await handleToday(bot, msg); return; }
+      if (cmd === 'clear_all') { await handleClearAll(bot, msg); return; }
+      if (cmd === 'clear_today') { await handleClearToday(bot, msg); return; }
+      if (cmd === 'pause') { await handlePause(bot, msg); return; }
+      if (cmd === 'resume') { await handleResume(bot, msg); return; }
+      if (cmd === 'undo') { await handleUndo(bot, msg); return; }
+      if (cmd === 'summary') { await handleWeeklySummary(bot, msg); return; }
       if (cmd === 'repeat') {
         const last = getLastCreated(String(chatId));
         if (!last) { bot.sendMessage(chatId, 'Nothing to repeat.'); return; }
-        saveAndConfirm(chatId, last, settings);
+        await saveAndConfirm(chatId, last, settings);
         return;
       }
-      if (cmd === 'timezone' && aiResult.args) { handleTimezone(bot, msg, [null, aiResult.args]); return; }
-      if (cmd === 'digest' && aiResult.args) { handleDigest(bot, msg, [null, aiResult.args]); return; }
+      if (cmd === 'timezone' && aiResult.args) { await handleTimezone(bot, msg, [null, aiResult.args]); return; }
+      if (cmd === 'digest' && aiResult.args) { await handleDigest(bot, msg, [null, aiResult.args]); return; }
     }
 
     if (aiResult.intent === 'action') {
@@ -291,7 +291,7 @@ bot.on('message', async (msg) => {
         const names = [];
         for (const id of ids) {
           const r = activeReminders.find(rem => rem.id === id);
-          if (r) { cancelReminder(id); deactivateReminder(id); names.push(r.text); }
+          if (r) { cancelReminder(id); await deactivateReminder(id); names.push(r.text); }
         }
         if (names.length > 0) {
           bot.sendMessage(chatId, `✅ Cancelled: ${names.map(n => `"${n}"`).join(', ')}`);
@@ -306,7 +306,7 @@ bot.on('message', async (msg) => {
           if (r && aiResult.newTime) {
             cancelReminder(id);
             const { updateReminderTime: updateTime } = await import('./db.js');
-            updateTime(id, new Date(aiResult.newTime).toISOString());
+            await updateTime(id, new Date(aiResult.newTime).toISOString());
             const { scheduleReminder: sched } = await import('./scheduler.js');
             sched({ ...r, remind_at: new Date(aiResult.newTime).toISOString() });
             const timeStr = new Date(aiResult.newTime).toLocaleString('en-US', {
@@ -323,7 +323,7 @@ bot.on('message', async (msg) => {
           const r = activeReminders.find(rem => rem.id === id);
           if (r && aiResult.newText) {
             const { updateReminderText: updateText } = await import('./db.js');
-            updateText(id, aiResult.newText);
+            await updateText(id, aiResult.newText);
             bot.sendMessage(chatId, `✅ Updated #${id}: "${aiResult.newText}"`);
           }
         }
@@ -333,7 +333,7 @@ bot.on('message', async (msg) => {
         for (const id of ids) {
           const r = activeReminders.find(rem => rem.id === id);
           if (r && aiResult.note) {
-            addNoteToReminder(id, aiResult.note);
+            await addNoteToReminder(id, aiResult.note);
             bot.sendMessage(chatId, `📝 Note added to "${r.text}": ${aiResult.note}`);
           }
         }
@@ -361,7 +361,7 @@ bot.on('message', async (msg) => {
             mediaType: urlMatch ? 'link' : null,
             mediaId: urlMatch ? urlMatch[1] : null,
           };
-          saveAndConfirm(chatId, parsed, settings);
+          await saveAndConfirm(chatId, parsed, settings);
         }
       }
       if (reminders.length > 0) return;
@@ -372,7 +372,7 @@ bot.on('message', async (msg) => {
   const parsed = parseReminder(text, settings.timezone);
 
   if (parsed) {
-    saveAndConfirm(chatId, parsed, settings);
+    await saveAndConfirm(chatId, parsed, settings);
     return;
   }
 
@@ -386,10 +386,10 @@ bot.on('message', async (msg) => {
   );
 });
 
-function saveAndConfirm(chatId, parsed, settings) {
+async function saveAndConfirm(chatId, parsed, settings) {
   trackLastCreated(chatId, parsed);
 
-  const id = createReminder({
+  const id = await createReminder({
     chatId: String(chatId),
     text: parsed.text,
     remindAt: parsed.remindAt.toISOString(),
@@ -400,23 +400,23 @@ function saveAndConfirm(chatId, parsed, settings) {
 
   // Save notes if present
   if (parsed.notes) {
-    addNoteToReminder(id, parsed.notes);
+    await addNoteToReminder(id, parsed.notes);
   }
 
   // Check for pending photo to attach
   const pendingPhoto = pendingPhotos.get(String(chatId));
   if (pendingPhoto) {
     pendingPhotos.delete(String(chatId));
-    attachMedia(id, 'reply', String(pendingPhoto.msgId));
+    await attachMedia(id, 'reply', String(pendingPhoto.msgId));
   }
 
   // Save explicitly provided media
   if (parsed.mediaType && parsed.mediaId) {
-    attachMedia(id, parsed.mediaType, parsed.mediaId);
+    await attachMedia(id, parsed.mediaType, parsed.mediaId);
   }
 
   // Re-fetch from DB so media_type, media_id, notes are all included
-  const reminder = getReminder(id);
+  const reminder = await getReminder(id);
   scheduleReminder(reminder);
 
   const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);

@@ -53,7 +53,7 @@ async function fireReminder(reminder) {
   if (!botInstance) return;
 
   // Context-aware message
-  const settings = getSettings(reminder.chat_id);
+  const settings = await getSettings(reminder.chat_id);
   const message = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes);
   const options = buildSnoozeKeyboard(reminder.id);
 
@@ -69,12 +69,12 @@ async function fireReminder(reminder) {
     } else {
       await botInstance.sendMessage(reminder.chat_id, message, options);
     }
-    markReminderFired(reminder.id);
+    await markReminderFired(reminder.id);
   } catch (err) {
     // If reply fails (message deleted), send without reply
     try {
       await botInstance.sendMessage(reminder.chat_id, message, options);
-      markReminderFired(reminder.id);
+      await markReminderFired(reminder.id);
     } catch (err2) {
       console.error(`Failed to send reminder ${reminder.id}:`, err2.message);
     }
@@ -82,13 +82,13 @@ async function fireReminder(reminder) {
 
   // If it's a one-off reminder, deactivate it
   if (!reminder.cron_expr) {
-    deactivateReminder(reminder.id);
+    await deactivateReminder(reminder.id);
     activeJobs.delete(reminder.id);
   } else {
     // For recurring, update remind_at to next occurrence (cron handles scheduling)
     const nextRun = getNextCronDate(reminder.cron_expr);
     if (nextRun) {
-      updateReminderTime(reminder.id, nextRun.toISOString());
+      await updateReminderTime(reminder.id, nextRun.toISOString());
     }
   }
 }
@@ -148,14 +148,15 @@ export function cancelReminder(reminderId) {
   activeJobs.delete(reminderId);
 }
 
-export function snoozeReminder(reminderId, minutes) {
+export async function snoozeReminder(reminderId, minutes) {
   cancelReminder(reminderId);
 
   const newTime = new Date(Date.now() + minutes * 60 * 1000);
   const reminder = { id: reminderId, remind_at: newTime.toISOString(), cron_expr: null };
 
   // Re-fetch the full reminder to get the text for firing
-  const full = getAllActiveReminders().find(r => r.id === reminderId);
+  const allActive = await getAllActiveReminders();
+  const full = allActive.find(r => r.id === reminderId);
   if (full) {
     full.remind_at = newTime.toISOString();
     full.cron_expr = null; // snooze is always one-off
@@ -167,8 +168,8 @@ export function snoozeReminder(reminderId, minutes) {
  * Load all active reminders from DB and schedule them.
  * Called on bot startup.
  */
-export function loadAllReminders() {
-  const reminders = getAllActiveReminders();
+export async function loadAllReminders() {
+  const reminders = await getAllActiveReminders();
   let scheduled = 0;
   let pastDue = 0;
 
@@ -200,11 +201,11 @@ export function setupDailyDigest() {
   cron.schedule('0 */6 * * *', async () => {
     if (!botInstance) return;
 
-    const allReminders = getAllActiveReminders();
+    const allReminders = await getAllActiveReminders();
     const chatIds = [...new Set(allReminders.map(r => r.chat_id))];
 
     for (const chatId of chatIds) {
-      const ignored = getIgnoredReminders(chatId);
+      const ignored = await getIgnoredReminders(chatId);
       if (ignored.length === 0) continue;
 
       let msg = '🔔 *Ignored Reminders*\n\nThese reminders have been firing for 3+ days without response:\n\n';
@@ -230,15 +231,15 @@ export function setupDailyDigest() {
     const dateStr = now.toISOString().split('T')[0];
 
     // This is a simple approach — for production you'd query settings more efficiently
-    const allReminders = getAllActiveReminders();
+    const allReminders = await getAllActiveReminders();
     const chatIds = [...new Set(allReminders.map(r => r.chat_id))];
 
     for (const chatId of chatIds) {
-      const settings = getSettings(chatId);
+      const settings = await getSettings(chatId);
       if (!settings.daily_digest) continue;
       if (settings.digest_time !== currentTime) continue;
 
-      const todaysReminders = getTodaysReminders(chatId, dateStr);
+      const todaysReminders = await getTodaysReminders(chatId, dateStr);
       if (todaysReminders.length === 0) continue;
 
       let message = '📋 *Today\'s Reminders:*\n\n';
@@ -263,12 +264,12 @@ export function setupDailyDigest() {
   cron.schedule('0 21 * * 0', async () => {
     if (!botInstance) return;
 
-    const allReminders = getAllActiveReminders();
+    const allReminders = await getAllActiveReminders();
     const chatIds = [...new Set(allReminders.map(r => r.chat_id))];
 
     for (const chatId of chatIds) {
-      const stats = getWeeklyStats(chatId);
-      const active = getActiveReminders(chatId);
+      const stats = await getWeeklyStats(chatId);
+      const active = await getActiveReminders(chatId);
       const total = stats.completed + stats.snoozed + stats.missed;
       if (total === 0) continue;
 
