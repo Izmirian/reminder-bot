@@ -26,7 +26,7 @@ function getNextCronDate() {
 async function fireReminder(reminder) {
   try {
     const settings = getSettings(reminder.chat_id);
-    const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone);
+    const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes);
     await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
     markReminderFired(reminder.id);
   } catch (err) {

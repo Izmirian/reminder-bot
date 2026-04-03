@@ -2,7 +2,7 @@ import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import {
   createReminder, getSettings, getReminder, getActiveReminders,
-  snoozeReminder as dbSnooze, deactivateReminder,
+  snoozeReminder as dbSnooze, deactivateReminder, addNoteToReminder,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
 } from './db.js';
@@ -251,6 +251,16 @@ bot.on('message', async (msg) => {
         }
         return;
       }
+      if (aiResult.action === 'add_note') {
+        for (const id of ids) {
+          const r = activeReminders.find(rem => rem.id === id);
+          if (r && aiResult.note) {
+            addNoteToReminder(id, aiResult.note);
+            bot.sendMessage(chatId, `📝 Note added to "${r.text}": ${aiResult.note}`);
+          }
+        }
+        return;
+      }
     }
 
     if (aiResult.intent === 'reminder') {
@@ -267,6 +277,7 @@ bot.on('message', async (msg) => {
             remindAt: new Date(r.remindAt),
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
+            notes: r.notes || null,
           };
           saveAndConfirm(chatId, parsed, settings);
         }
@@ -305,6 +316,11 @@ function saveAndConfirm(chatId, parsed, settings) {
     category: parsed.category,
   });
 
+  // Save notes if present
+  if (parsed.notes) {
+    addNoteToReminder(id, parsed.notes);
+  }
+
   const reminder = {
     id,
     chat_id: String(chatId),
@@ -317,12 +333,12 @@ function saveAndConfirm(chatId, parsed, settings) {
 
   const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
   const relTime = relativeTime(parsed.remindAt);
-  const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[parsed.category] || '';
   const recurLabel = parsed.cronExpr ? '\n🔁 Recurring' : '';
+  const noteLabel = parsed.notes ? `\n📝 Note: ${parsed.notes}` : '';
 
   bot.sendMessage(
     chatId,
-    `✅ Reminder set! ${catEmoji}\n\n📝 *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}`,
+    `✅ *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}${noteLabel}`,
     { parse_mode: 'Markdown' }
   );
 }

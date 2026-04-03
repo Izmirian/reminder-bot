@@ -57,6 +57,9 @@ if (!columns.includes('last_fired_at')) {
 if (!columns.includes('ignored_since')) {
   db.exec('ALTER TABLE reminders ADD COLUMN ignored_since TEXT');
 }
+if (!columns.includes('notes')) {
+  db.exec('ALTER TABLE reminders ADD COLUMN notes TEXT');
+}
 
 // Reminder CRUD
 
@@ -184,6 +187,13 @@ export function getPausedReminders(chatId) {
 
 export function updateReminderText(id, newText) {
   db.prepare('UPDATE reminders SET text = ? WHERE id = ?').run(newText, id);
+}
+
+export function addNoteToReminder(id, note) {
+  const existing = db.prepare('SELECT notes FROM reminders WHERE id = ?').get(id);
+  const current = existing?.notes || '';
+  const updated = current ? `${current}\n${note}` : note;
+  db.prepare('UPDATE reminders SET notes = ? WHERE id = ?').run(updated, id);
 }
 
 // Snooze tracking

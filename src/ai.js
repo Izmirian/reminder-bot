@@ -45,8 +45,10 @@ function buildPrompt(activeReminders) {
 Classify the message into one of these intents and return a JSON object:
 
 1. **"reminder"** — The user wants to set one or more reminders.
-   Return: { "intent": "reminder", "reminders": [{ "text": "...", "remindAt": "ISO8601", "cronExpr": "cron or null", "category": "health|work|personal|null" }] }
+   Return: { "intent": "reminder", "reminders": [{ "text": "...", "remindAt": "ISO8601", "cronExpr": "cron or null", "category": "health|work|personal|null", "notes": "extra info or null" }] }
    - If the message contains MULTIPLE reminders, return multiple items in the array.
+   - If a message has a main task AND extra context/notes (e.g., "head to factory at 4:30 also note I need 15k"), create ONE reminder with the task as "text" and the extra info as "notes".
+   - "notes" is for supplementary information related to the reminder — amounts, details, context, things to bring, etc.
    - If you can't determine the time, return: { "intent": "reminder", "needsInfo": "short clarifying question" }
 
 2. **"chat"** — The user is chatting, greeting, asking a question, or making conversation.
@@ -60,13 +62,14 @@ Classify the message into one of these intents and return a JSON object:
    Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|timezone|digest|help|menu", "args": "optional" }
    - IMPORTANT: "cancel", "delete", "remove", "edit", "change", "move", "reschedule" referring to existing reminders should ALWAYS use intent "action", NOT "command".
 
-4. **"action"** — The user wants to cancel, edit, or reschedule EXISTING reminders. Use this for ANY message about modifying, deleting, removing, or changing reminders.
-   Return: { "intent": "action", "action": "cancel|edit|reschedule", "ids": [1, 2], "newTime": "ISO8601 or null", "newText": "new text or null" }
+4. **"action"** — The user wants to cancel, edit, reschedule, or add notes to EXISTING reminders. Use this for ANY message about modifying, deleting, removing, or changing reminders.
+   Return: { "intent": "action", "action": "cancel|edit|reschedule|add_note", "ids": [1, 2], "newTime": "ISO8601 or null", "newText": "new text or null", "note": "note text or null" }
    - "cancel both" or "cancel all" → ids = all active reminder IDs
    - "cancel the soccer one" → match by text, return its ID
    - "move dinner to 8pm" → action=reschedule, match "dinner" to its ID, include newTime
    - "change soccer to basketball" → action=edit, match "soccer" to its ID, include newText
    - "delete the first one" → ids = [first reminder ID]
+   - "note: bring the documents" or "add note to factory reminder: need 15k" → action=add_note, match reminder, include note
    - If you can't determine which reminder, return: { "intent": "action", "needsInfo": "Which reminder? ..." }
 
 Time context:

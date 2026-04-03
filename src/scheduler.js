@@ -54,7 +54,7 @@ async function fireReminder(reminder) {
 
   // Context-aware message
   const settings = getSettings(reminder.chat_id);
-  const message = buildContextualMessage(reminder.text, reminder.category, settings.timezone);
+  const message = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes);
   const options = buildSnoozeKeyboard(reminder.id);
 
   try {
