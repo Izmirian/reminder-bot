@@ -6,7 +6,8 @@ import {
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
 } from './db.js';
-import { parseReminderSmart } from './parser.js';
+import { parseReminderSmart, parseReminder, detectCategory } from './parser.js';
+import { classifyIntent } from './ai.js';
 import { detectRecurringPattern } from './patterns.js';
 import {
   init as initScheduler,
@@ -159,75 +160,97 @@ bot.on('message', async (msg) => {
   if (pendingClarification.has(String(chatId))) {
     const ctx = pendingClarification.get(String(chatId));
     pendingClarification.delete(String(chatId));
-    // Combine original message with the answer
     const combined = `${ctx.originalText} (${text})`;
     const settings = getSettings(String(chatId));
     const parsed = await parseReminderSmart(combined, settings.timezone);
     if (parsed && !parsed.needsInfo && parsed.remindAt) {
       return saveAndConfirm(chatId, parsed, settings);
     }
-    bot.sendMessage(chatId, "I still couldn't understand. Try something like:\n\"remind me at 3pm to call dentist\"");
+    bot.sendMessage(chatId, "Hmm, I still couldn't figure that out. Try: \"remind me at 3pm to call dentist\"");
     return;
   }
 
-  // Natural text shortcuts
-  if (['hi', 'hey', 'hello', 'menu', 'yo', 'sup', "what's up", 'whats up', 'wassup', 'whaddup'].includes(lower)) {
-    handleMenu(bot, msg); return;
-  }
-  if (['view', 'list', 'reminders', 'my reminders'].includes(lower)) {
-    handleList(bot, msg); return;
-  }
-  if (['clear all', 'reset'].includes(lower)) {
-    handleClearAll(bot, msg); return;
-  }
-  if (['today', "today's reminders", 'todays reminders', 'list today'].includes(lower)) {
-    handleToday(bot, msg); return;
-  }
-  if (['clear today', 'remove today', "remove today's reminders", "clear today's reminders"].includes(lower)) {
-    handleClearToday(bot, msg); return;
-  }
-  if (lower === 'pause') { handlePause(bot, msg); return; }
-  if (lower === 'resume') { handleResume(bot, msg); return; }
-  if (lower === 'help') { handleHelp(bot, msg); return; }
-  if (lower === 'undo') { handleUndo(bot, msg); return; }
-  if (lower === 'summary' || lower === 'weekly' || lower === 'stats') { handleWeeklySummary(bot, msg); return; }
-
-  // Repeat last reminder
-  if (lower === 'repeat' || lower === 'again' || lower === 'repeat last') {
-    const last = getLastCreated(String(chatId));
-    if (!last) { bot.sendMessage(chatId, 'Nothing to repeat. Set a reminder first!'); return; }
-    const settings = getSettings(String(chatId));
-    saveAndConfirm(chatId, last, settings);
-    return;
-  }
-
-  // Natural conversation check (before reminder parsing)
-  const convoResponse = getConversationalResponse(text);
-  if (convoResponse) {
-    bot.sendMessage(chatId, convoResponse);
-    return;
-  }
-
-  // Try smart parsing (AI first, then chrono fallback)
+  // --- AI-first intent classification ---
   const settings = getSettings(String(chatId));
-  const parsed = await parseReminderSmart(text, settings.timezone);
+  const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString());
 
-  if (!parsed) {
-    bot.sendMessage(chatId,
-      "Hey! 😊 I'm not sure what you mean.\n\n" +
-      "If you want to set a reminder, try:\n" +
-      '• "remind me at 3pm to call dentist"\n' +
-      '• "in 30 minutes check the oven"\n\n' +
-      "Or just chat — I'm friendly! Send /menu for options."
-    );
+  if (aiResult) {
+    // AI understood the intent
+    if (aiResult.intent === 'chat') {
+      bot.sendMessage(chatId, aiResult.reply || "Hey! 👋 Need to set a reminder?");
+      return;
+    }
+
+    if (aiResult.intent === 'command') {
+      const cmd = aiResult.command;
+      if (cmd === 'menu' || cmd === 'start') { handleMenu(bot, msg); return; }
+      if (cmd === 'list') { handleList(bot, msg); return; }
+      if (cmd === 'help') { handleHelp(bot, msg); return; }
+      if (cmd === 'today') { handleToday(bot, msg); return; }
+      if (cmd === 'clear_all') { handleClearAll(bot, msg); return; }
+      if (cmd === 'clear_today') { handleClearToday(bot, msg); return; }
+      if (cmd === 'pause') { handlePause(bot, msg); return; }
+      if (cmd === 'resume') { handleResume(bot, msg); return; }
+      if (cmd === 'undo') { handleUndo(bot, msg); return; }
+      if (cmd === 'summary') { handleWeeklySummary(bot, msg); return; }
+      if (cmd === 'repeat') {
+        const last = getLastCreated(String(chatId));
+        if (!last) { bot.sendMessage(chatId, 'Nothing to repeat.'); return; }
+        saveAndConfirm(chatId, last, settings);
+        return;
+      }
+      if (cmd === 'cancel' && aiResult.args) {
+        handleCancel(bot, msg, [null, aiResult.args]); return;
+      }
+      if (cmd === 'timezone' && aiResult.args) {
+        handleTimezone(bot, msg, [null, aiResult.args]); return;
+      }
+      if (cmd === 'digest' && aiResult.args) {
+        handleDigest(bot, msg, [null, aiResult.args]); return;
+      }
+    }
+
+    if (aiResult.intent === 'reminder') {
+      if (aiResult.needsInfo) {
+        pendingClarification.set(String(chatId), { originalText: text });
+        bot.sendMessage(chatId, `🤔 ${aiResult.needsInfo}`);
+        return;
+      }
+
+      // Handle multiple reminders
+      const reminders = aiResult.reminders || [];
+      for (const r of reminders) {
+        if (r.remindAt) {
+          const parsed = {
+            text: r.text,
+            remindAt: new Date(r.remindAt),
+            cronExpr: r.cronExpr || null,
+            category: r.category || detectCategory(r.text),
+          };
+          saveAndConfirm(chatId, parsed, settings);
+        }
+      }
+      if (reminders.length > 0) return;
+    }
+  }
+
+  // --- Fallback: try chrono-node parser (if AI unavailable or returned nothing useful) ---
+  const parsed = parseReminder(text, settings.timezone);
+
+  if (parsed) {
+    saveAndConfirm(chatId, parsed, settings);
     return;
   }
 
-  // AI needs more info
-  if (parsed.needsInfo) {
-    pendingClarification.set(String(chatId), { originalText: text });
-    bot.sendMessage(chatId, `🤔 ${parsed.needsInfo}`);
-    return;
+  // Nothing worked — friendly fallback
+  bot.sendMessage(chatId,
+    "Hey! 😊 I'm not sure what you mean.\n\n" +
+    "To set a reminder, try:\n" +
+    '• "remind me at 3pm to call dentist"\n' +
+    '• "in 30 minutes check the oven"\n\n' +
+    "Or just chat — I'm friendly! Send /menu for options."
+  );
+  return;
   }
 
   saveAndConfirm(chatId, parsed, settings);

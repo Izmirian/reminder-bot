@@ -1,6 +1,6 @@
 /**
- * Claude API integration for smart reminder parsing.
- * Falls back gracefully if no API key is set or API is unavailable.
+ * Claude AI integration — intent classification and smart reminder parsing.
+ * Every message goes through Claude to understand what the user wants.
  */
 
 let client = null;
@@ -23,40 +23,46 @@ async function ensureClient() {
   return initPromise;
 }
 
-const SYSTEM_PROMPT = `You are a reminder parser. Given a user's message, extract a structured reminder.
+const INTENT_PROMPT = `You are a smart assistant inside a reminder bot. Your job is to understand the user's intent and respond appropriately.
 
-Return ONLY a JSON object with these fields:
-- "text": The cleaned reminder text (what to remind about)
-- "remindAt": ISO 8601 datetime string for when to remind (use the provided timezone)
-- "cronExpr": 5-field cron expression if recurring, or null for one-off
-- "category": One of "health", "work", "personal", or null
-- "needsInfo": If you can't determine the time, set this to a short clarifying question. Set remindAt to null in this case.
+Classify the message into one of these intents and return a JSON object:
 
-Time context mappings:
-- "after lunch" = 1:00 PM
-- "after work" = 6:00 PM
-- "morning" = 9:00 AM
-- "evening" = 7:00 PM
-- "tonight" = 9:00 PM
-- "end of day" = 5:00 PM
+1. **"reminder"** — The user wants to set one or more reminders.
+   Return: { "intent": "reminder", "reminders": [{ "text": "...", "remindAt": "ISO8601", "cronExpr": "cron or null", "category": "health|work|personal|null" }] }
+   - If the message contains MULTIPLE reminders (e.g., "remind me to call mom at 3pm and buy groceries at 5pm"), return multiple items in the array.
+   - If you can't determine the time, return: { "intent": "reminder", "needsInfo": "What time should I remind you?" }
+
+2. **"chat"** — The user is just chatting, greeting, asking a question, or making conversation.
+   Return: { "intent": "chat", "reply": "Your friendly response here" }
+   - Be warm, friendly, and natural. You're a helpful bot with personality.
+   - For greetings: respond warmly and mention you can help with reminders.
+   - For questions about you: explain you're a reminder bot.
+   - For general questions: give a brief answer and mention you're mainly a reminder bot.
+   - Keep replies short (1-3 sentences).
+
+3. **"command"** — The user wants to perform a bot action (list reminders, cancel, etc.)
+   Return: { "intent": "command", "command": "list|cancel|clear_all|clear_today|pause|resume|undo|repeat|summary|timezone|digest|help|menu", "args": "optional args" }
+
+Time context:
+- "after lunch" = 1:00 PM, "after work" = 6:00 PM, "morning" = 9:00 AM
+- "evening" = 7:00 PM, "tonight" = 9:00 PM, "end of day" = 5:00 PM
 - "later" = 2 hours from now
 
 Category detection:
-- health: medicine, doctor, gym, vitamins, dentist, workout, meds, pills, hospital
-- work: meeting, email, report, deadline, submit, presentation, call (work context), boss, client
-- personal: groceries, buy, pick up, laundry, clean, cook, birthday, gift
+- health: medicine, doctor, gym, vitamins, dentist, workout, meds
+- work: meeting, email, report, deadline, submit, presentation, client
+- personal: groceries, buy, pick up, laundry, clean, cook, birthday
 
-Always return valid JSON. No markdown, no explanation, just the JSON object.`;
+Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 
 /**
- * Parse a reminder using Claude AI.
- * Returns { text, remindAt, cronExpr, category, needsInfo } or null.
+ * Classify user intent and get appropriate response.
+ * Returns { intent, reply?, reminders?, needsInfo?, command?, args? } or null if AI unavailable.
  */
-export async function parseWithAI(userMessage, timezone, currentTime) {
+export async function classifyIntent(userMessage, timezone, currentTime) {
   const api = await ensureClient();
   if (!api) return null;
 
-  // Circuit breaker
   if (!aiAvailable) {
     if (Date.now() - lastFailure < COOLDOWN_MS) return null;
     aiAvailable = true;
@@ -65,9 +71,9 @@ export async function parseWithAI(userMessage, timezone, currentTime) {
   try {
     const response = await api.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
-      temperature: 0,
-      system: SYSTEM_PROMPT,
+      max_tokens: 400,
+      temperature: 0.3,
+      system: INTENT_PROMPT,
       messages: [{
         role: 'user',
         content: `Current time: ${currentTime}\nTimezone: ${timezone}\nUser message: "${userMessage}"`,
@@ -77,18 +83,23 @@ export async function parseWithAI(userMessage, timezone, currentTime) {
     let text = response.content[0]?.text;
     if (!text) return null;
 
-    // Strip markdown code fences if present
     text = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-
-    const parsed = JSON.parse(text);
-    if (!parsed.text) return null;
-    if (!parsed.remindAt && !parsed.needsInfo) return null;
-
-    return parsed;
+    return JSON.parse(text);
   } catch (err) {
-    console.error('[AI] Parse failed:', err.message);
+    console.error('[AI] Intent classification failed:', err.message);
     aiAvailable = false;
     lastFailure = Date.now();
     return null;
   }
+}
+
+// Keep the old parseWithAI for backward compatibility
+export async function parseWithAI(userMessage, timezone, currentTime) {
+  const result = await classifyIntent(userMessage, timezone, currentTime);
+  if (!result || result.intent !== 'reminder') return null;
+  if (result.needsInfo) return { needsInfo: result.needsInfo };
+  if (result.reminders && result.reminders.length > 0) {
+    return result.reminders[0]; // return first reminder for backward compat
+  }
+  return null;
 }

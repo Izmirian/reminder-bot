@@ -2,7 +2,8 @@
  * Handles incoming WhatsApp messages — parses reminders, commands, and button replies.
  */
 import { sendTextMessage, sendReminderMessage } from './api.js';
-import { parseReminderSmart, parseReminder } from '../parser.js';
+import { parseReminderSmart, parseReminder, detectCategory } from '../parser.js';
+import { classifyIntent } from '../ai.js';
 import {
   createReminder, getActiveReminders, getReminder, deactivateReminder,
   deactivateAllReminders, deactivateTodaysReminders, pauseAllReminders,
@@ -74,55 +75,80 @@ export async function handleTextMessage(from, text) {
     if (parsed && !parsed.needsInfo && parsed.remindAt) {
       return saveAndConfirm(from, parsed, settings);
     }
-    return sendTextMessage(from, "I still couldn't understand. Try:\n\"remind me at 3pm to call dentist\"");
+    return sendTextMessage(from, "Hmm, I still couldn't figure that out. Try: \"remind me at 3pm to call dentist\"");
   }
 
-  // Greetings / Menu
-  if (['hi', 'hey', 'hello', 'menu', 'start', '/start', 'yo', 'sup', "what's up", 'whats up', 'wassup', 'whaddup'].includes(lower)) return sendMenu(from);
-
-  // Menu shortcuts
-  if (lower === '1') return sendTextMessage(from, '📝 Just type your reminder naturally!\n\nExamples:\n• "remind me at 3pm to call dentist"\n• "in 30 minutes check the oven"\n• "every day at 9am take vitamins"');
-  if (lower === '2' || lower === 'view' || lower === 'reminders' || lower === 'my reminders') return sendList(from);
-  if (lower === '3' || lower === 'clear all' || lower === 'reset') return handleClearAll(from);
+  // Menu number shortcuts (these are unambiguous)
+  if (lower === '1') return sendTextMessage(from, '📝 Just type your reminder naturally!');
+  if (lower === '2') return sendList(from);
+  if (lower === '3') return handleClearAll(from);
   if (lower === '4') return handleTimezone(from, 'timezone');
   if (lower === '5') return handleDigest(from, 'digest');
-  if (lower === '6' || lower === 'help' || lower === '/help') return sendHelp(from);
+  if (lower === '6') return sendHelp(from);
 
-  // Commands
-  if (lower === 'list' || lower === '/list') return sendList(from);
-  if (lower === 'today' || lower === "today's reminders" || lower === 'todays reminders' || lower === 'list today') return sendTodaysList(from);
-  if (lower === 'clear today' || lower === 'remove today' || lower === "remove today's reminders" || lower === "clear today's reminders") return handleClearToday(from);
-  if (lower.startsWith('cancel ') || lower.startsWith('/cancel')) return handleCancel(from, text.trim());
-  if (lower.startsWith('timezone ') || lower.startsWith('/timezone')) return handleTimezone(from, text.trim());
-  if (lower.startsWith('digest ') || lower.startsWith('/digest')) return handleDigest(from, text.trim());
-  if (lower.startsWith('edit ') || lower.startsWith('/edit')) return handleEdit(from, text.trim());
-  if (lower === 'pause') return handlePause(from);
-  if (lower === 'resume') return handleResume(from);
-  if (lower === 'undo') return handleUndo(from);
-  if (lower === 'summary' || lower === 'weekly' || lower === 'stats') return handleWeekly(from);
-  if (lower === 'repeat' || lower === 'again' || lower === 'repeat last') return handleRepeat(from);
+  // Explicit command prefixes
+  if (lower.startsWith('/cancel') || lower.startsWith('cancel ')) return handleCancel(from, text.trim());
+  if (lower.startsWith('/edit') || lower.startsWith('edit ')) return handleEdit(from, text.trim());
+  if (lower.startsWith('/timezone') || lower.startsWith('timezone ')) return handleTimezone(from, text.trim());
+  if (lower.startsWith('/digest') || lower.startsWith('digest ')) return handleDigest(from, text.trim());
 
-  // Natural conversation check
-  const convoResponse = getConversationalResponse(text.trim());
-  if (convoResponse) return sendTextMessage(from, convoResponse);
-
-  // Smart parsing (AI first, then chrono fallback)
+  // --- AI-first intent classification ---
   const settings = getSettings(from);
-  const parsed = await parseReminderSmart(text.trim(), settings.timezone);
+  const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString());
 
-  if (!parsed) {
-    return sendTextMessage(from,
-      "Hey! 😊 I'm not sure what you mean.\n\nIf you want to set a reminder, try:\n• \"remind me at 3pm to call dentist\"\n• \"in 30 minutes check the oven\"\n\nOr just chat — I'm friendly! Send *menu* for options."
-    );
+  if (aiResult) {
+    if (aiResult.intent === 'chat') {
+      return sendTextMessage(from, aiResult.reply || "Hey! 👋 Need to set a reminder?");
+    }
+
+    if (aiResult.intent === 'command') {
+      const cmd = aiResult.command;
+      if (cmd === 'menu' || cmd === 'start') return sendMenu(from);
+      if (cmd === 'list') return sendList(from);
+      if (cmd === 'help') return sendHelp(from);
+      if (cmd === 'today') return sendTodaysList(from);
+      if (cmd === 'clear_all') return handleClearAll(from);
+      if (cmd === 'clear_today') return handleClearToday(from);
+      if (cmd === 'pause') return handlePause(from);
+      if (cmd === 'resume') return handleResume(from);
+      if (cmd === 'undo') return handleUndo(from);
+      if (cmd === 'summary') return handleWeekly(from);
+      if (cmd === 'repeat') return handleRepeat(from);
+    }
+
+    if (aiResult.intent === 'reminder') {
+      if (aiResult.needsInfo) {
+        pendingClarification.set(from, { originalText: text.trim() });
+        return sendTextMessage(from, `🤔 ${aiResult.needsInfo}`);
+      }
+
+      const reminders = aiResult.reminders || [];
+      for (const r of reminders) {
+        if (r.remindAt) {
+          const parsed = {
+            text: r.text,
+            remindAt: new Date(r.remindAt),
+            cronExpr: r.cronExpr || null,
+            category: r.category || detectCategory(r.text),
+          };
+          await saveAndConfirm(from, parsed, settings);
+        }
+      }
+      if (reminders.length > 0) return;
+    }
   }
 
-  // AI needs more info
-  if (parsed.needsInfo) {
-    pendingClarification.set(from, { originalText: text.trim() });
-    return sendTextMessage(from, `🤔 ${parsed.needsInfo}`);
+  // --- Fallback: chrono-node parser (if AI unavailable) ---
+  const parsed = parseReminder(text.trim(), settings.timezone);
+  if (parsed) {
+    return saveAndConfirm(from, parsed, settings);
   }
 
-  return saveAndConfirm(from, parsed, settings);
+  // Nothing worked
+  return sendTextMessage(from,
+    "Hey! 😊 I'm not sure what you mean.\n\nTo set a reminder, try:\n• \"remind me at 3pm to call dentist\"\n• \"in 30 minutes check the oven\"\n\nOr just chat — I'm friendly! Send *menu* for options."
+  );
+
 }
 
 async function handleUndo(from) {
