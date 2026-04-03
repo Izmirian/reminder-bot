@@ -584,13 +584,7 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
       return sendTextMessage(from, 'Got the photo! When should I remind you?');
     }
 
-    // No caption — attach to last reminder or ask
-    const lastRem = getLastReminder(from);
-    if (lastRem) {
-      attachMedia(lastRem.id, 'wa_image', storedMediaId);
-      return sendTextMessage(from, `Photo linked to "${lastRem.text}"`);
-    }
-
+    // No caption — always ask when to remind
     pendingPhotos.set(from, { mediaId: storedMediaId, text: 'Photo reminder' });
     return sendTextMessage(from, 'Got the photo! When should I remind you about it?');
   } catch (err) {

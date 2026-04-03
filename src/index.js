@@ -181,15 +181,9 @@ bot.on('message', async (msg) => {
         pendingPhotos.set(String(chatId), { msgId, text: caption });
         bot.sendMessage(chatId, 'Got the photo! When should I remind you?');
       } else {
-        // No caption — attach to last reminder or ask
-        const lastRem = getLastReminder(String(chatId));
-        if (lastRem) {
-          attachMedia(lastRem.id, 'reply', String(msgId));
-          bot.sendMessage(chatId, `Photo linked to "${lastRem.text}"`);
-        } else {
-          pendingPhotos.set(String(chatId), { msgId, text: 'Photo reminder' });
-          bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?');
-        }
+        // No caption — always ask when to remind
+        pendingPhotos.set(String(chatId), { msgId, text: 'Photo reminder' });
+        bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?');
       }
     } catch (err) {
       console.error('[Photo error]', err);
