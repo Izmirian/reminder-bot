@@ -150,44 +150,33 @@ bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const msgId = msg.message_id;
     const caption = msg.caption || '';
+    console.log(`[Photo] from ${chatId}, caption: "${caption}", msgId: ${msgId}`);
 
-    try {
-      const settings = getSettings(String(chatId));
+    // Store photo and process caption through the normal text flow
+    pendingPhotos.set(String(chatId), { msgId, text: caption || 'Photo reminder' });
 
-      if (caption) {
-        const aiResult = await classifyIntent(caption, settings.timezone, new Date().toISOString(), getActiveReminders(String(chatId)));
-
-        if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
-          const r = aiResult.reminders[0];
-          saveAndConfirm(chatId, {
-            text: r.text, remindAt: new Date(r.remindAt), cronExpr: r.cronExpr || null,
-            category: r.category || detectCategory(r.text), notes: r.notes || null,
-            mediaType: 'reply', mediaId: String(msgId),
-          }, settings);
-          return;
+    if (caption) {
+      // Process caption as if it were a text message — but inject the photo
+      // We fake msg.text so the rest of the handler processes it
+      msg.text = caption;
+      // Don't return — let it fall through to the text handler below
+    } else {
+      // No caption — attach to last reminder or ask for time
+      try {
+        const lastRem = getLastReminder(String(chatId));
+        if (lastRem) {
+          attachMedia(lastRem.id, 'reply', String(msgId));
+          pendingPhotos.delete(String(chatId));
+          bot.sendMessage(chatId, `Photo linked to "${lastRem.text}"`);
+        } else {
+          bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?');
         }
-
-        // Has caption but no time — ask when
-        pendingPhotos.set(String(chatId), { msgId, text: caption });
-        bot.sendMessage(chatId, 'Got it! When should I remind you?');
-        return;
+      } catch (err) {
+        console.error('[Photo error]', err);
+        bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?').catch(() => {});
       }
-
-      // No caption — attach to last reminder or ask
-      const lastRem = getLastReminder(String(chatId));
-      if (lastRem) {
-        attachMedia(lastRem.id, 'reply', String(msgId));
-        bot.sendMessage(chatId, `Photo linked to "${lastRem.text}"`);
-      } else {
-        pendingPhotos.set(String(chatId), { msgId, text: 'Photo reminder' });
-        bot.sendMessage(chatId, 'Got it! When should I remind you about this?');
-      }
-    } catch (err) {
-      console.error('[Photo handler error]', err.message);
-      bot.sendMessage(chatId, 'Got it! When should I remind you about this?');
-      pendingPhotos.set(String(chatId), { msgId, text: caption || 'Photo reminder' });
+      return;
     }
-    return;
   }
 
   if (!msg.text || msg.text.startsWith('/')) return;
@@ -400,7 +389,14 @@ function saveAndConfirm(chatId, parsed, settings) {
     addNoteToReminder(id, parsed.notes);
   }
 
-  // Save media if present
+  // Check for pending photo to attach
+  const pendingPhoto = pendingPhotos.get(String(chatId));
+  if (pendingPhoto) {
+    pendingPhotos.delete(String(chatId));
+    attachMedia(id, 'reply', String(pendingPhoto.msgId));
+  }
+
+  // Save explicitly provided media
   if (parsed.mediaType && parsed.mediaId) {
     attachMedia(id, parsed.mediaType, parsed.mediaId);
   }
