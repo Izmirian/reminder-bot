@@ -1,5 +1,5 @@
 /**
- * Claude AI integration — intent classification and smart reminder parsing.
+ * Claude AI integration — intent classification and smart message handling.
  * Every message goes through Claude to understand what the user wants.
  */
 
@@ -23,43 +23,66 @@ async function ensureClient() {
   return initPromise;
 }
 
-const INTENT_PROMPT = `You are a smart assistant inside a reminder bot. Your job is to understand the user's intent and respond appropriately.
+function buildPrompt(activeReminders) {
+  let remindersContext = '';
+  if (activeReminders && activeReminders.length > 0) {
+    remindersContext = '\n\nThe user currently has these active reminders:\n';
+    for (const r of activeReminders) {
+      const time = new Date(r.remind_at).toLocaleString('en-US', {
+        weekday: 'short', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true,
+      });
+      const recur = r.cron_expr ? ' (recurring)' : '';
+      remindersContext += `#${r.id}: "${r.text}" — ${time}${recur}\n`;
+    }
+    remindersContext += '\nUse these IDs when the user refers to reminders by name, position, or says "both", "all", etc.';
+  } else {
+    remindersContext = '\n\nThe user has no active reminders.';
+  }
+
+  return `You are a smart assistant inside a reminder bot. Your job is to understand the user's intent and respond appropriately.
 
 Classify the message into one of these intents and return a JSON object:
 
 1. **"reminder"** — The user wants to set one or more reminders.
    Return: { "intent": "reminder", "reminders": [{ "text": "...", "remindAt": "ISO8601", "cronExpr": "cron or null", "category": "health|work|personal|null" }] }
-   - If the message contains MULTIPLE reminders (e.g., "remind me to call mom at 3pm and buy groceries at 5pm"), return multiple items in the array.
-   - If you can't determine the time, return: { "intent": "reminder", "needsInfo": "What time should I remind you?" }
+   - If the message contains MULTIPLE reminders, return multiple items in the array.
+   - If you can't determine the time, return: { "intent": "reminder", "needsInfo": "short clarifying question" }
 
-2. **"chat"** — The user is just chatting, greeting, asking a question, or making conversation.
+2. **"chat"** — The user is chatting, greeting, asking a question, or making conversation.
    Return: { "intent": "chat", "reply": "Your friendly response here" }
    - Be warm, friendly, and natural. You're a helpful bot with personality.
-   - For greetings: respond warmly and mention you can help with reminders.
-   - For questions about you: explain you're a reminder bot.
-   - For general questions: give a brief answer and mention you're mainly a reminder bot.
    - Keep replies short (1-3 sentences).
+   - For greetings like "whatsup", "yo", "hey there", etc: respond warmly.
+   - For questions: give a brief answer.
 
-3. **"command"** — The user wants to perform a bot action (list reminders, cancel, etc.)
-   Return: { "intent": "command", "command": "list|cancel|clear_all|clear_today|pause|resume|undo|repeat|summary|timezone|digest|help|menu", "args": "optional args" }
+3. **"command"** — The user wants to perform a bot action.
+   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|timezone|digest|help|menu", "args": "optional" }
+
+4. **"action"** — The user wants to cancel, edit, or reschedule EXISTING reminders.
+   Return: { "intent": "action", "action": "cancel|edit|reschedule", "ids": [1, 2], "newTime": "ISO8601 or null", "newText": "new text or null" }
+   - "cancel both" or "cancel all" → ids = all active reminder IDs
+   - "cancel the soccer one" → match by text, return its ID
+   - "move dinner to 8pm" → action=reschedule, match "dinner" to its ID, include newTime
+   - "change soccer to basketball" → action=edit, match "soccer" to its ID, include newText
+   - "delete the first one" → ids = [first reminder ID]
+   - If you can't determine which reminder, return: { "intent": "action", "needsInfo": "Which reminder? ..." }
 
 Time context:
 - "after lunch" = 1:00 PM, "after work" = 6:00 PM, "morning" = 9:00 AM
 - "evening" = 7:00 PM, "tonight" = 9:00 PM, "end of day" = 5:00 PM
 - "later" = 2 hours from now
 
-Category detection:
-- health: medicine, doctor, gym, vitamins, dentist, workout, meds
-- work: meeting, email, report, deadline, submit, presentation, client
-- personal: groceries, buy, pick up, laundry, clean, cook, birthday
+Category: health (medicine, doctor, gym), work (meeting, email, deadline), personal (groceries, buy, clean)
+${remindersContext}
 
 Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
+}
 
 /**
- * Classify user intent and get appropriate response.
- * Returns { intent, reply?, reminders?, needsInfo?, command?, args? } or null if AI unavailable.
+ * Classify user intent with context about their active reminders.
  */
-export async function classifyIntent(userMessage, timezone, currentTime) {
+export async function classifyIntent(userMessage, timezone, currentTime, activeReminders) {
   const api = await ensureClient();
   if (!api) return null;
 
@@ -71,9 +94,9 @@ export async function classifyIntent(userMessage, timezone, currentTime) {
   try {
     const response = await api.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 400,
+      max_tokens: 500,
       temperature: 0.3,
-      system: INTENT_PROMPT,
+      system: buildPrompt(activeReminders),
       messages: [{
         role: 'user',
         content: `Current time: ${currentTime}\nTimezone: ${timezone}\nUser message: "${userMessage}"`,
@@ -93,13 +116,11 @@ export async function classifyIntent(userMessage, timezone, currentTime) {
   }
 }
 
-// Keep the old parseWithAI for backward compatibility
+// Backward compat
 export async function parseWithAI(userMessage, timezone, currentTime) {
-  const result = await classifyIntent(userMessage, timezone, currentTime);
+  const result = await classifyIntent(userMessage, timezone, currentTime, []);
   if (!result || result.intent !== 'reminder') return null;
   if (result.needsInfo) return { needsInfo: result.needsInfo };
-  if (result.reminders && result.reminders.length > 0) {
-    return result.reminders[0]; // return first reminder for backward compat
-  }
+  if (result.reminders && result.reminders.length > 0) return result.reminders[0];
   return null;
 }

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import {
-  createReminder, getSettings, getReminder,
+  createReminder, getSettings, getReminder, getActiveReminders,
   snoozeReminder as dbSnooze, deactivateReminder,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
@@ -172,10 +172,10 @@ bot.on('message', async (msg) => {
 
   // --- AI-first intent classification ---
   const settings = getSettings(String(chatId));
-  const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString());
+  const activeReminders = getActiveReminders(String(chatId));
+  const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString(), activeReminders);
 
   if (aiResult) {
-    // AI understood the intent
     if (aiResult.intent === 'chat') {
       bot.sendMessage(chatId, aiResult.reply || "Hey! 👋 Need to set a reminder?");
       return;
@@ -199,14 +199,57 @@ bot.on('message', async (msg) => {
         saveAndConfirm(chatId, last, settings);
         return;
       }
-      if (cmd === 'cancel' && aiResult.args) {
-        handleCancel(bot, msg, [null, aiResult.args]); return;
+      if (cmd === 'timezone' && aiResult.args) { handleTimezone(bot, msg, [null, aiResult.args]); return; }
+      if (cmd === 'digest' && aiResult.args) { handleDigest(bot, msg, [null, aiResult.args]); return; }
+    }
+
+    if (aiResult.intent === 'action') {
+      if (aiResult.needsInfo) {
+        bot.sendMessage(chatId, `🤔 ${aiResult.needsInfo}`);
+        return;
       }
-      if (cmd === 'timezone' && aiResult.args) {
-        handleTimezone(bot, msg, [null, aiResult.args]); return;
+      const ids = aiResult.ids || [];
+      if (aiResult.action === 'cancel') {
+        const names = [];
+        for (const id of ids) {
+          const r = activeReminders.find(rem => rem.id === id);
+          if (r) { cancelReminder(id); deactivateReminder(id); names.push(r.text); }
+        }
+        if (names.length > 0) {
+          bot.sendMessage(chatId, `✅ Cancelled: ${names.map(n => `"${n}"`).join(', ')}`);
+        } else {
+          bot.sendMessage(chatId, "Couldn't find those reminders.");
+        }
+        return;
       }
-      if (cmd === 'digest' && aiResult.args) {
-        handleDigest(bot, msg, [null, aiResult.args]); return;
+      if (aiResult.action === 'reschedule') {
+        for (const id of ids) {
+          const r = activeReminders.find(rem => rem.id === id);
+          if (r && aiResult.newTime) {
+            cancelReminder(id);
+            const { updateReminderTime: updateTime } = await import('./db.js');
+            updateTime(id, new Date(aiResult.newTime).toISOString());
+            const { scheduleReminder: sched } = await import('./scheduler.js');
+            sched({ ...r, remind_at: new Date(aiResult.newTime).toISOString() });
+            const timeStr = new Date(aiResult.newTime).toLocaleString('en-US', {
+              timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
+              hour: '2-digit', minute: '2-digit', hour12: true,
+            });
+            bot.sendMessage(chatId, `✅ Rescheduled "${r.text}" to ${timeStr}`);
+          }
+        }
+        return;
+      }
+      if (aiResult.action === 'edit') {
+        for (const id of ids) {
+          const r = activeReminders.find(rem => rem.id === id);
+          if (r && aiResult.newText) {
+            const { updateReminderText: updateText } = await import('./db.js');
+            updateText(id, aiResult.newText);
+            bot.sendMessage(chatId, `✅ Updated #${id}: "${aiResult.newText}"`);
+          }
+        }
+        return;
       }
     }
 
@@ -216,8 +259,6 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, `🤔 ${aiResult.needsInfo}`);
         return;
       }
-
-      // Handle multiple reminders
       const reminders = aiResult.reminders || [];
       for (const r of reminders) {
         if (r.remindAt) {

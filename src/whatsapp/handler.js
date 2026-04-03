@@ -94,7 +94,8 @@ export async function handleTextMessage(from, text) {
 
   // --- AI-first intent classification ---
   const settings = getSettings(from);
-  const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString());
+  const activeRems = getActiveReminders(from);
+  const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString(), activeRems);
 
   if (aiResult) {
     if (aiResult.intent === 'chat') {
@@ -116,12 +117,55 @@ export async function handleTextMessage(from, text) {
       if (cmd === 'repeat') return handleRepeat(from);
     }
 
+    if (aiResult.intent === 'action') {
+      if (aiResult.needsInfo) {
+        return sendTextMessage(from, `🤔 ${aiResult.needsInfo}`);
+      }
+      const ids = aiResult.ids || [];
+      if (aiResult.action === 'cancel') {
+        const names = [];
+        for (const id of ids) {
+          const r = activeRems.find(rem => rem.id === id);
+          if (r) { cancelReminder(id); deactivateReminder(id); names.push(r.text); }
+        }
+        if (names.length > 0) {
+          return sendTextMessage(from, `✅ Cancelled: ${names.map(n => `"${n}"`).join(', ')}`);
+        }
+        return sendTextMessage(from, "Couldn't find those reminders.");
+      }
+      if (aiResult.action === 'reschedule') {
+        for (const id of ids) {
+          const r = activeRems.find(rem => rem.id === id);
+          if (r && aiResult.newTime) {
+            cancelReminder(id);
+            updateReminderTime(id, new Date(aiResult.newTime).toISOString());
+            scheduleReminder({ ...r, remind_at: new Date(aiResult.newTime).toISOString() });
+            const timeStr = new Date(aiResult.newTime).toLocaleString('en-US', {
+              timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
+              hour: '2-digit', minute: '2-digit', hour12: true,
+            });
+            await sendTextMessage(from, `✅ Rescheduled "${r.text}" to ${timeStr}`);
+          }
+        }
+        return;
+      }
+      if (aiResult.action === 'edit') {
+        for (const id of ids) {
+          const r = activeRems.find(rem => rem.id === id);
+          if (r && aiResult.newText) {
+            updateReminderText(id, aiResult.newText);
+            await sendTextMessage(from, `✅ Updated #${id}: "${aiResult.newText}"`);
+          }
+        }
+        return;
+      }
+    }
+
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {
         pendingClarification.set(from, { originalText: text.trim() });
         return sendTextMessage(from, `🤔 ${aiResult.needsInfo}`);
       }
-
       const reminders = aiResult.reminders || [];
       for (const r of reminders) {
         if (r.remindAt) {
