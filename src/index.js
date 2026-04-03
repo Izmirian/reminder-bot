@@ -250,10 +250,6 @@ bot.on('message', async (msg) => {
     '• "in 30 minutes check the oven"\n\n' +
     "Or just chat — I'm friendly! Send /menu for options."
   );
-  return;
-  }
-
-  saveAndConfirm(chatId, parsed, settings);
 });
 
 function saveAndConfirm(chatId, parsed, settings) {
