@@ -58,12 +58,11 @@ async function fireReminder(reminder) {
   const options = buildSnoozeKeyboard(reminder.id);
 
   try {
-    // Send photo with caption if media attached
-    if (reminder.media_type === 'photo' && reminder.media_id) {
-      await botInstance.sendPhoto(reminder.chat_id, reminder.media_id, {
-        caption: message,
-        parse_mode: 'Markdown',
+    if (reminder.media_type === 'reply' && reminder.media_id) {
+      // Reply to the original message (photo/media) so user sees it linked
+      await botInstance.sendMessage(reminder.chat_id, message, {
         ...options,
+        reply_to_message_id: parseInt(reminder.media_id, 10),
       });
     } else if (reminder.media_type === 'link' && reminder.media_id) {
       await botInstance.sendMessage(reminder.chat_id, `${message}\n\n${reminder.media_id}`, options);
@@ -72,7 +71,13 @@ async function fireReminder(reminder) {
     }
     markReminderFired(reminder.id);
   } catch (err) {
-    console.error(`Failed to send reminder ${reminder.id}:`, err.message);
+    // If reply fails (message deleted), send without reply
+    try {
+      await botInstance.sendMessage(reminder.chat_id, message, options);
+      markReminderFired(reminder.id);
+    } catch (err2) {
+      console.error(`Failed to send reminder ${reminder.id}:`, err2.message);
+    }
   }
 
   // If it's a one-off reminder, deactivate it

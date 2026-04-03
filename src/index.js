@@ -149,7 +149,7 @@ bot.on('message', async (msg) => {
   if (msg.photo && msg.photo.length > 0) {
     const chatId = msg.chat.id;
     const caption = msg.caption || '';
-    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    const msgId = msg.message_id; // store message ID to reply to it later
     const settings = getSettings(String(chatId));
 
     if (caption) {
@@ -160,35 +160,35 @@ bot.on('message', async (msg) => {
         saveAndConfirm(chatId, {
           text: r.text, remindAt: new Date(r.remindAt), cronExpr: r.cronExpr || null,
           category: r.category || detectCategory(r.text), notes: r.notes || null,
-          mediaType: 'photo', mediaId: fileId,
+          mediaType: 'reply', mediaId: String(msgId),
         }, settings);
         return;
       }
 
       if (aiResult?.intent === 'reminder' && (aiResult.needsInfo || aiResult.reminders?.[0])) {
-        pendingPhotos.set(String(chatId), { fileId, text: aiResult.reminders?.[0]?.text || caption });
-        bot.sendMessage(chatId, 'Got the photo! When should I remind you?');
+        pendingPhotos.set(String(chatId), { msgId, text: aiResult.reminders?.[0]?.text || caption });
+        bot.sendMessage(chatId, 'Got it! When should I remind you?');
         return;
       }
 
       if (aiResult?.intent === 'action' && aiResult.action === 'add_note') {
         for (const id of (aiResult.ids || [])) {
-          attachMedia(id, 'photo', fileId);
+          attachMedia(id, 'reply', String(msgId));
           const rem = getActiveReminders(String(chatId)).find(r => r.id === id);
-          if (rem) bot.sendMessage(chatId, `Photo attached to "${rem.text}"`);
+          if (rem) bot.sendMessage(chatId, `Photo linked to "${rem.text}"`);
         }
         return;
       }
     }
 
-    // No caption or no time — attach to last or ask
+    // No caption — attach to last or ask
     const lastRem = getLastReminder(String(chatId));
     if (lastRem) {
-      attachMedia(lastRem.id, 'photo', fileId);
-      bot.sendMessage(chatId, `Photo attached to "${lastRem.text}"`);
+      attachMedia(lastRem.id, 'reply', String(msgId));
+      bot.sendMessage(chatId, `Photo linked to "${lastRem.text}"`);
     } else {
-      pendingPhotos.set(String(chatId), { fileId, text: caption || 'Photo reminder' });
-      bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?');
+      pendingPhotos.set(String(chatId), { msgId, text: caption || 'Photo reminder' });
+      bot.sendMessage(chatId, 'Got it! When should I remind you about this?');
     }
     return;
   }
@@ -213,12 +213,12 @@ bot.on('message', async (msg) => {
         cronExpr: null,
         category: r.category || null,
         notes: null,
-        mediaType: 'photo',
-        mediaId: photo.fileId,
+        mediaType: 'reply',
+        mediaId: String(photo.msgId),
       }, settings);
     } else {
-      bot.sendMessage(chatId, "Couldn't understand the time. Try again: \"in 30 minutes\" or \"at 3pm\"");
-      pendingPhotos.set(String(chatId), photo); // re-store
+      bot.sendMessage(chatId, "Couldn't understand the time. Try: \"in 30 minutes\" or \"at 3pm\"");
+      pendingPhotos.set(String(chatId), photo);
     }
     return;
   }
