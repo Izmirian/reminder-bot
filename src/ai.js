@@ -105,6 +105,18 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
     aiAvailable = true;
   }
 
+  // Convert to local time string so AI gets the correct time
+  let localTimeStr;
+  try {
+    localTimeStr = new Date().toLocaleString('en-US', {
+      timeZone: timezone,
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
+    });
+  } catch {
+    localTimeStr = currentTime;
+  }
+
   try {
     const response = await api.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -113,7 +125,7 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
       system: buildPrompt(activeReminders),
       messages: [{
         role: 'user',
-        content: `Current time: ${currentTime}\nTimezone: ${timezone}\nUser message: "${userMessage}"`,
+        content: `Current local time: ${localTimeStr}\nTimezone: ${timezone}\nUser message: "${userMessage}"`,
       }],
     });
 
