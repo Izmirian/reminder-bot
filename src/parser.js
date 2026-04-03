@@ -121,10 +121,38 @@ export function parseSnooze(text) {
 }
 
 /**
+ * Check if input has signals that it's intended as a reminder.
+ * Prevents casual messages with incidental time words from being parsed.
+ */
+function looksLikeReminder(input) {
+  const lower = input.toLowerCase();
+
+  // Strong signals — definitely a reminder
+  if (/\bremind\b/i.test(lower)) return true;
+  if (/\bat\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/i.test(lower)) return true;  // "at 3pm", "at 9:00"
+  if (/\bin\s+\d+\s*(min|hour|day|sec)/i.test(lower)) return true;         // "in 30 minutes"
+  if (/\bevery\s+(day|week|mon|tue|wed|thu|fri|sat|sun|hour|\d)/i.test(lower)) return true;
+  if (/\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(lower)) return true;           // "3pm", "9:00am"
+  if (/o'?clock/i.test(lower)) return true;
+  if (/\btomorrow\b.*\b(to|call|buy|send|email|check|go|take|meet|pay|clean|cook|pick|submit|finish|do)\b/i.test(lower)) return true;
+
+  // "tomorrow" alone with an action verb somewhere
+  if (/\btomorrow\b/i.test(lower) && /\b(call|buy|send|email|check|go|take|meet|pay|clean|cook|pick|submit|finish|do|get|make|schedule|book)\b/i.test(lower)) return true;
+
+  // Starts with action-like words that suggest a task
+  if (/^(remind|call|email|buy|pick up|submit|send|take|check|go to|meet|pay|book|clean|cook|finish|complete|start)\b/i.test(lower)) return true;
+
+  return false;
+}
+
+/**
  * Main parse function.
  * Returns { text, remindAt (Date), cronExpr (string|null), category } or null if unparseable.
  */
 export function parseReminder(input, timezone = 'UTC') {
+  // Reject messages that don't look like reminders
+  if (!looksLikeReminder(input)) return null;
+
   const recurrence = parseRecurrence(input);
 
   // Use chrono to extract the date/time
@@ -149,6 +177,17 @@ export function parseReminder(input, timezone = 'UTC') {
 
   const reminderText = extractReminderText(input);
   const category = detectCategory(reminderText);
+
+  // Reject if cleaned text is too short / meaningless
+  if (reminderText.length < 2 || reminderText.toLowerCase() === input.toLowerCase()) {
+    // The text extraction removed nothing, meaning there was no time component
+    // This happens with messages like "hello today" where "today" is the only parseable part
+    if (!recurrence && results.length > 0) {
+      const chronoText = results[0].text;
+      // If chrono matched almost the entire input, it's not a real reminder
+      if (chronoText.length > input.trim().length * 0.6) return null;
+    }
+  }
 
   let cronExpr = null;
   if (recurrence) {
