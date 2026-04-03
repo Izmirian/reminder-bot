@@ -421,21 +421,16 @@ function saveAndConfirm(chatId, parsed, settings) {
     attachMedia(id, parsed.mediaType, parsed.mediaId);
   }
 
-  const reminder = {
-    id,
-    chat_id: String(chatId),
-    text: parsed.text,
-    remind_at: parsed.remindAt.toISOString(),
-    cron_expr: parsed.cronExpr,
-    category: parsed.category,
-  };
+  // Re-fetch from DB so media_type, media_id, notes are all included
+  const reminder = getReminder(id);
   scheduleReminder(reminder);
 
   const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
   const relTime = relativeTime(parsed.remindAt);
   const recurLabel = parsed.cronExpr ? '\nRecurring' : '';
   const noteLabel = parsed.notes ? `\nNote: ${parsed.notes}` : '';
-  const mediaLabel = parsed.mediaType === 'photo' ? '\n📷 Photo attached' : parsed.mediaType === 'link' ? `\n🔗 ${parsed.mediaId}` : '';
+  const hasPhoto = parsed.mediaType === 'reply' || pendingPhotos.has(String(chatId));
+  const mediaLabel = hasPhoto ? '\nPhoto linked' : parsed.mediaType === 'link' ? `\n${parsed.mediaId}` : '';
 
   bot.sendMessage(
     chatId,
