@@ -139,21 +139,23 @@ bot.on('callback_query', async (query) => {
 
 // --- Photo handler ---
 
+// Store pending photos waiting for a time
+const pendingPhotos = new Map(); // chatId -> { fileId, caption }
+
 bot.on('photo', async (msg) => {
   const chatId = msg.chat.id;
   const caption = msg.caption || '';
-  const fileId = msg.photo[msg.photo.length - 1].file_id; // highest resolution
-
+  const fileId = msg.photo[msg.photo.length - 1].file_id;
   const settings = getSettings(String(chatId));
 
   if (caption) {
-    // Photo with caption — try to parse as a reminder
     const aiResult = await classifyIntent(caption, settings.timezone, new Date().toISOString(), getActiveReminders(String(chatId)));
 
+    // Reminder with time — create it with photo
     if (aiResult?.intent === 'reminder' && aiResult.reminders?.length > 0) {
       const r = aiResult.reminders[0];
       if (r.remindAt) {
-        const parsed = {
+        saveAndConfirm(chatId, {
           text: r.text,
           remindAt: new Date(r.remindAt),
           cronExpr: r.cronExpr || null,
@@ -161,31 +163,44 @@ bot.on('photo', async (msg) => {
           notes: r.notes || null,
           mediaType: 'photo',
           mediaId: fileId,
-        };
-        saveAndConfirm(chatId, parsed, settings);
+        }, settings);
+        return;
+      }
+      // No time — ask when
+      if (aiResult.needsInfo || !r.remindAt) {
+        pendingPhotos.set(String(chatId), { fileId, text: r.text || caption });
+        bot.sendMessage(chatId, `Got the photo! When should I remind you? (e.g., "in 30 minutes", "at 3pm", "tomorrow 9am")`);
         return;
       }
     }
 
+    // Reminder intent but needs time
+    if (aiResult?.intent === 'reminder' && aiResult.needsInfo) {
+      pendingPhotos.set(String(chatId), { fileId, text: caption });
+      bot.sendMessage(chatId, `Got the photo! When should I remind you?`);
+      return;
+    }
+
+    // Attach to existing reminder
     if (aiResult?.intent === 'action' && aiResult.action === 'add_note') {
-      // Attaching photo to existing reminder
       const ids = aiResult.ids || [];
       for (const id of ids) {
         attachMedia(id, 'photo', fileId);
         const rem = getActiveReminders(String(chatId)).find(r => r.id === id);
-        if (rem) bot.sendMessage(chatId, `📷 Photo attached to "${rem.text}"`);
+        if (rem) bot.sendMessage(chatId, `Photo attached to "${rem.text}"`);
       }
       return;
     }
   }
 
-  // Photo without caption or unparseable — attach to most recent reminder
+  // No caption or unparseable — attach to most recent reminder or ask
   const lastRem = getLastReminder(String(chatId));
   if (lastRem) {
     attachMedia(lastRem.id, 'photo', fileId);
-    bot.sendMessage(chatId, `📷 Photo attached to "${lastRem.text}"`);
+    bot.sendMessage(chatId, `Photo attached to "${lastRem.text}"`);
   } else {
-    bot.sendMessage(chatId, "Got the photo! Set a reminder first and I'll attach it.");
+    pendingPhotos.set(String(chatId), { fileId, text: 'Photo reminder' });
+    bot.sendMessage(chatId, `Got the photo! When should I remind you about it?`);
   }
 });
 
@@ -197,6 +212,30 @@ bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text.trim();
   const lower = text.toLowerCase();
+
+  // Check for pending photo awaiting a time
+  if (pendingPhotos.has(String(chatId))) {
+    const photo = pendingPhotos.get(String(chatId));
+    pendingPhotos.delete(String(chatId));
+    const settings = getSettings(String(chatId));
+    const aiResult = await classifyIntent(`remind me ${text} to ${photo.text}`, settings.timezone, new Date().toISOString(), []);
+    if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+      const r = aiResult.reminders[0];
+      saveAndConfirm(chatId, {
+        text: photo.text,
+        remindAt: new Date(r.remindAt),
+        cronExpr: null,
+        category: r.category || null,
+        notes: null,
+        mediaType: 'photo',
+        mediaId: photo.fileId,
+      }, settings);
+    } else {
+      bot.sendMessage(chatId, "Couldn't understand the time. Try again: \"in 30 minutes\" or \"at 3pm\"");
+      pendingPhotos.set(String(chatId), photo); // re-store
+    }
+    return;
+  }
 
   // Check for pending "YES" confirmation for clear all
   if (pendingClearAll.has(String(chatId))) {
