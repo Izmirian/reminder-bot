@@ -27,15 +27,19 @@ function buildPrompt(activeReminders) {
   let remindersContext = '';
   if (activeReminders && activeReminders.length > 0) {
     remindersContext = '\n\nThe user currently has these active reminders:\n';
-    for (const r of activeReminders) {
+    const letters = 'abcdefghijklmnopqrstuvwxyz';
+    for (let i = 0; i < activeReminders.length; i++) {
+      const r = activeReminders[i];
+      const letter = letters[i] || String(i);
       const time = new Date(r.remind_at).toLocaleString('en-US', {
         weekday: 'short', month: 'short', day: 'numeric',
         hour: '2-digit', minute: '2-digit', hour12: true,
       });
       const recur = r.cron_expr ? ' (recurring)' : '';
-      remindersContext += `#${r.id}: "${r.text}" — ${time}${recur}\n`;
+      const notes = r.notes ? ` [note: ${r.notes}]` : '';
+      remindersContext += `${letter}) ID=${r.id}: "${r.text}" — ${time}${recur}${notes}\n`;
     }
-    remindersContext += '\nUse these IDs when the user refers to reminders by name, position, or says "both", "all", etc.';
+    remindersContext += '\nUsers refer to reminders by letter (a, b, c), by name, by "both", "all", "first", "last", etc. ALWAYS return the numeric ID values in the "ids" array, not the letters. When user says "cancel a and b" or "cancel 1 and 3", return ALL mentioned IDs.';
   } else {
     remindersContext = '\n\nThe user has no active reminders.';
   }

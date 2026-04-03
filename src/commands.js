@@ -144,35 +144,36 @@ export function handleList(bot, msg) {
     else upcoming.push(r);
   }
 
+  const letters = 'abcdefghijklmnopqrstuvwxyz';
+  let idx = 0;
   let message = '📋 *Your Reminders*\n';
 
   if (today.length > 0) {
-    message += '\n*📅 Today:*\n';
+    message += '\n*Today:*\n';
     for (const r of today) {
       const time = new Date(r.remind_at).toLocaleTimeString('en-US', {
         timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true,
       });
       const rel = relativeTime(new Date(r.remind_at));
-      const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[r.category] || '';
-      message += `  *#${r.id}* ${catEmoji} ${r.text}\n    ⏰ ${time} (in ${rel})\n`;
+      const noteLabel = r.notes ? `\n    📝 ${r.notes}` : '';
+      message += `  *${letters[idx++]})* ${r.text}\n    ${time} (${rel})${noteLabel}\n`;
     }
   }
 
   if (upcoming.length > 0) {
-    message += '\n*📆 Upcoming:*\n';
+    message += '\n*Upcoming:*\n';
     for (const r of upcoming) {
       const time = formatTime(r.remind_at, settings.timezone);
       const rel = relativeTime(new Date(r.remind_at));
-      const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[r.category] || '';
-      message += `  *#${r.id}* ${catEmoji} ${r.text}\n    ⏰ ${time} (in ${rel})\n`;
+      const noteLabel = r.notes ? `\n    📝 ${r.notes}` : '';
+      message += `  *${letters[idx++]})* ${r.text}\n    ${time} (${rel})${noteLabel}\n`;
     }
   }
 
   if (recurring.length > 0) {
-    message += '\n*🔁 Recurring:*\n';
+    message += '\n*Recurring:*\n';
     for (const r of recurring) {
-      const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[r.category] || '';
-      message += `  *#${r.id}* ${catEmoji} ${r.text}\n    🔁 ${r.cron_expr}\n`;
+      message += `  *${letters[idx++]})* ${r.text}\n    🔁 ${r.cron_expr}\n`;
     }
   }
 
@@ -184,7 +185,7 @@ export function handleList(bot, msg) {
     message += '\nUse /resume to reactivate.';
   }
 
-  message += '\n\n_/cancel <id> | /edit <id> ..._';
+  message += '\n\n_Say "cancel a" or "cancel all" to remove._';
   bot.sendMessage(chatId, message, MD);
 }
 

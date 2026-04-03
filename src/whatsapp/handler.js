@@ -87,8 +87,9 @@ export async function handleTextMessage(from, text) {
   if (lower === '6') return sendHelp(from);
 
   // Explicit command prefixes
-  if (lower.startsWith('/cancel') || lower.startsWith('cancel ')) return handleCancel(from, text.trim());
-  if (lower.startsWith('/edit') || lower.startsWith('edit ')) return handleEdit(from, text.trim());
+  // Only match explicit /cancel and /edit slash commands — natural language goes through AI
+  if (lower.startsWith('/cancel')) return handleCancel(from, text.trim());
+  if (lower.startsWith('/edit')) return handleEdit(from, text.trim());
   if (lower.startsWith('/timezone') || lower.startsWith('timezone ')) return handleTimezone(from, text.trim());
   if (lower.startsWith('/digest') || lower.startsWith('digest ')) return handleDigest(from, text.trim());
 
@@ -351,38 +352,39 @@ async function sendList(to) {
     else upcoming.push(r);
   }
 
+  const letters = 'abcdefghijklmnopqrstuvwxyz';
+  let idx = 0;
   let msg = '📋 *Your Reminders*\n';
   if (today.length > 0) {
-    msg += '\n*📅 Today:*\n';
+    msg += '\n*Today:*\n';
     for (const r of today) {
       const time = new Date(r.remind_at).toLocaleTimeString('en-US', { timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true });
       const rel = relativeTime(new Date(r.remind_at));
-      const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[r.category] || '';
-      msg += `  *#${r.id}* ${catEmoji} ${r.text}\n    ⏰ ${time} (in ${rel})\n`;
+      const noteLabel = r.notes ? `\n    📝 ${r.notes}` : '';
+      msg += `  *${letters[idx++]})* ${r.text}\n    ${time} (${rel})${noteLabel}\n`;
     }
   }
   if (upcoming.length > 0) {
-    msg += '\n*📆 Upcoming:*\n';
+    msg += '\n*Upcoming:*\n';
     for (const r of upcoming) {
       const time = formatTime(r.remind_at, settings.timezone);
       const rel = relativeTime(new Date(r.remind_at));
-      const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[r.category] || '';
-      msg += `  *#${r.id}* ${catEmoji} ${r.text}\n    ⏰ ${time} (in ${rel})\n`;
+      const noteLabel = r.notes ? `\n    📝 ${r.notes}` : '';
+      msg += `  *${letters[idx++]})* ${r.text}\n    ${time} (${rel})${noteLabel}\n`;
     }
   }
   if (recurring.length > 0) {
-    msg += '\n*🔁 Recurring:*\n';
+    msg += '\n*Recurring:*\n';
     for (const r of recurring) {
-      const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[r.category] || '';
-      msg += `  *#${r.id}* ${catEmoji} ${r.text}\n    🔁 ${r.cron_expr}\n`;
+      msg += `  *${letters[idx++]})* ${r.text}\n    🔁 ${r.cron_expr}\n`;
     }
   }
   if (paused.length > 0) {
-    msg += `\n*⏸️ Paused (${paused.length}):*\n`;
-    for (const r of paused) msg += `  *#${r.id}* ${r.text}\n`;
+    msg += `\n*Paused (${paused.length}):*\n`;
+    for (const r of paused) msg += `  ${r.text}\n`;
     msg += '\n_Send "resume" to reactivate._';
   }
-  msg += '\n\n_Cancel: "cancel <id>" | Edit: "edit <id> ..."_';
+  msg += '\n\n_Say "cancel a" or "cancel all" to remove._';
   return sendTextMessage(to, msg);
 }
 
