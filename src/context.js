@@ -1,11 +1,11 @@
 /**
- * Context-aware message builder — clean, minimal reminder messages.
+ * Build the reminder fire message — clean and minimal.
  */
 
 export function buildContextualMessage(reminderText, category, timezone, notes) {
-  let msg = `⏰ Reminder: *${reminderText}*`;
+  let msg = `*${reminderText}*`;
   if (notes) {
-    msg += `\n📝 ${notes}`;
+    msg += `\n${notes}`;
   }
   return msg;
 }

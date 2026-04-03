@@ -35,13 +35,13 @@ function buildSnoozeKeyboard(reminderId) {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '⏰ 5 min', callback_data: `snooze:${reminderId}:5` },
-          { text: '⏰ 15 min', callback_data: `snooze:${reminderId}:15` },
-          { text: '⏰ 30 min', callback_data: `snooze:${reminderId}:30` },
-          { text: '⏰ 1 hour', callback_data: `snooze:${reminderId}:60` },
+          { text: '5 min', callback_data: `snooze:${reminderId}:5` },
+          { text: '15 min', callback_data: `snooze:${reminderId}:15` },
+          { text: '30 min', callback_data: `snooze:${reminderId}:30` },
+          { text: '1 hour', callback_data: `snooze:${reminderId}:60` },
         ],
         [
-          { text: '✅ Done', callback_data: `done:${reminderId}` },
+          { text: 'Done', callback_data: `done:${reminderId}` },
         ],
       ],
     },
