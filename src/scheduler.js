@@ -58,7 +58,18 @@ async function fireReminder(reminder) {
   const options = buildSnoozeKeyboard(reminder.id);
 
   try {
-    await botInstance.sendMessage(reminder.chat_id, message, options);
+    // Send photo with caption if media attached
+    if (reminder.media_type === 'photo' && reminder.media_id) {
+      await botInstance.sendPhoto(reminder.chat_id, reminder.media_id, {
+        caption: message,
+        parse_mode: 'Markdown',
+        ...options,
+      });
+    } else if (reminder.media_type === 'link' && reminder.media_id) {
+      await botInstance.sendMessage(reminder.chat_id, `${message}\n\n${reminder.media_id}`, options);
+    } else {
+      await botInstance.sendMessage(reminder.chat_id, message, options);
+    }
     markReminderFired(reminder.id);
   } catch (err) {
     console.error(`Failed to send reminder ${reminder.id}:`, err.message);

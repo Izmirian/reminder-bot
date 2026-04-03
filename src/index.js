@@ -3,6 +3,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import {
   createReminder, getSettings, getReminder, getActiveReminders,
   snoozeReminder as dbSnooze, deactivateReminder, addNoteToReminder,
+  attachMedia, getLastReminder,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
 } from './db.js';
@@ -133,6 +134,58 @@ bot.on('callback_query', async (query) => {
         { parse_mode: 'Markdown' }
       );
     }
+  }
+});
+
+// --- Photo handler ---
+
+bot.on('photo', async (msg) => {
+  const chatId = msg.chat.id;
+  const caption = msg.caption || '';
+  const fileId = msg.photo[msg.photo.length - 1].file_id; // highest resolution
+
+  const settings = getSettings(String(chatId));
+
+  if (caption) {
+    // Photo with caption — try to parse as a reminder
+    const aiResult = await classifyIntent(caption, settings.timezone, new Date().toISOString(), getActiveReminders(String(chatId)));
+
+    if (aiResult?.intent === 'reminder' && aiResult.reminders?.length > 0) {
+      const r = aiResult.reminders[0];
+      if (r.remindAt) {
+        const parsed = {
+          text: r.text,
+          remindAt: new Date(r.remindAt),
+          cronExpr: r.cronExpr || null,
+          category: r.category || detectCategory(r.text),
+          notes: r.notes || null,
+          mediaType: 'photo',
+          mediaId: fileId,
+        };
+        saveAndConfirm(chatId, parsed, settings);
+        return;
+      }
+    }
+
+    if (aiResult?.intent === 'action' && aiResult.action === 'add_note') {
+      // Attaching photo to existing reminder
+      const ids = aiResult.ids || [];
+      for (const id of ids) {
+        attachMedia(id, 'photo', fileId);
+        const rem = getActiveReminders(String(chatId)).find(r => r.id === id);
+        if (rem) bot.sendMessage(chatId, `📷 Photo attached to "${rem.text}"`);
+      }
+      return;
+    }
+  }
+
+  // Photo without caption or unparseable — attach to most recent reminder
+  const lastRem = getLastReminder(String(chatId));
+  if (lastRem) {
+    attachMedia(lastRem.id, 'photo', fileId);
+    bot.sendMessage(chatId, `📷 Photo attached to "${lastRem.text}"`);
+  } else {
+    bot.sendMessage(chatId, "Got the photo! Set a reminder first and I'll attach it.");
   }
 });
 
@@ -270,6 +323,8 @@ bot.on('message', async (msg) => {
         return;
       }
       const reminders = aiResult.reminders || [];
+      // Extract URL from original message
+      const urlMatch = text.match(/(https?:\/\/[^\s]+)/i);
       for (const r of reminders) {
         if (r.remindAt) {
           const parsed = {
@@ -278,6 +333,8 @@ bot.on('message', async (msg) => {
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
             notes: r.notes || null,
+            mediaType: urlMatch ? 'link' : null,
+            mediaId: urlMatch ? urlMatch[1] : null,
           };
           saveAndConfirm(chatId, parsed, settings);
         }
@@ -321,6 +378,11 @@ function saveAndConfirm(chatId, parsed, settings) {
     addNoteToReminder(id, parsed.notes);
   }
 
+  // Save media if present
+  if (parsed.mediaType && parsed.mediaId) {
+    attachMedia(id, parsed.mediaType, parsed.mediaId);
+  }
+
   const reminder = {
     id,
     chat_id: String(chatId),
@@ -335,10 +397,11 @@ function saveAndConfirm(chatId, parsed, settings) {
   const relTime = relativeTime(parsed.remindAt);
   const recurLabel = parsed.cronExpr ? '\nRecurring' : '';
   const noteLabel = parsed.notes ? `\nNote: ${parsed.notes}` : '';
+  const mediaLabel = parsed.mediaType === 'photo' ? '\n📷 Photo attached' : parsed.mediaType === 'link' ? `\n🔗 ${parsed.mediaId}` : '';
 
   bot.sendMessage(
     chatId,
-    `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${noteLabel}`,
+    `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${noteLabel}${mediaLabel}`,
     { parse_mode: 'Markdown' }
   );
 }

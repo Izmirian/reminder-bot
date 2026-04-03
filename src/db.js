@@ -60,6 +60,12 @@ if (!columns.includes('ignored_since')) {
 if (!columns.includes('notes')) {
   db.exec('ALTER TABLE reminders ADD COLUMN notes TEXT');
 }
+if (!columns.includes('media_type')) {
+  db.exec('ALTER TABLE reminders ADD COLUMN media_type TEXT');  // 'photo', 'link', null
+}
+if (!columns.includes('media_id')) {
+  db.exec('ALTER TABLE reminders ADD COLUMN media_id TEXT');    // Telegram file_id or URL
+}
 
 // Reminder CRUD
 
@@ -194,6 +200,16 @@ export function addNoteToReminder(id, note) {
   const current = existing?.notes || '';
   const updated = current ? `${current}\n${note}` : note;
   db.prepare('UPDATE reminders SET notes = ? WHERE id = ?').run(updated, id);
+}
+
+export function attachMedia(id, mediaType, mediaId) {
+  db.prepare('UPDATE reminders SET media_type = ?, media_id = ? WHERE id = ?').run(mediaType, mediaId, id);
+}
+
+export function getLastReminder(chatId) {
+  return db.prepare(
+    'SELECT * FROM reminders WHERE chat_id = ? AND active = 1 ORDER BY rowid DESC LIMIT 1'
+  ).get(chatId);
 }
 
 // Snooze tracking
