@@ -145,38 +145,58 @@ const pendingPhotos = new Map();
 // --- Natural language message handler ---
 
 bot.on('message', async (msg) => {
-  // Handle photos
+  // Handle photos completely — don't fall through to text handler
   if (msg.photo && msg.photo.length > 0) {
     const chatId = msg.chat.id;
     const msgId = msg.message_id;
     const caption = msg.caption || '';
-    console.log(`[Photo] from ${chatId}, caption: "${caption}", msgId: ${msgId}`);
 
-    // Store photo and process caption through the normal text flow
-    pendingPhotos.set(String(chatId), { msgId, text: caption || 'Photo reminder' });
+    try {
+      if (caption) {
+        // Photo with caption — try to create a reminder
+        const settings = getSettings(String(chatId));
+        const activeRems = getActiveReminders(String(chatId));
+        const aiResult = await classifyIntent(caption, settings.timezone, new Date().toISOString(), activeRems);
 
-    if (caption) {
-      // Process caption as if it were a text message — but inject the photo
-      // We fake msg.text so the rest of the handler processes it
-      msg.text = caption;
-      // Don't return — let it fall through to the text handler below
-    } else {
-      // No caption — attach to last reminder or ask for time
-      try {
+        if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+          const r = aiResult.reminders[0];
+          saveAndConfirm(chatId, {
+            text: r.text, remindAt: new Date(r.remindAt), cronExpr: r.cronExpr || null,
+            category: r.category || null, notes: r.notes || null,
+            mediaType: 'reply', mediaId: String(msgId),
+          }, settings);
+          return;
+        }
+
+        // AI couldn't parse or needs info — try chrono
+        const parsed = parseReminder(caption, settings.timezone);
+        if (parsed) {
+          parsed.mediaType = 'reply';
+          parsed.mediaId = String(msgId);
+          saveAndConfirm(chatId, parsed, settings);
+          return;
+        }
+
+        // Nothing worked — store photo and ask for time
+        pendingPhotos.set(String(chatId), { msgId, text: caption });
+        bot.sendMessage(chatId, 'Got the photo! When should I remind you?');
+      } else {
+        // No caption — attach to last reminder or ask
         const lastRem = getLastReminder(String(chatId));
         if (lastRem) {
           attachMedia(lastRem.id, 'reply', String(msgId));
-          pendingPhotos.delete(String(chatId));
           bot.sendMessage(chatId, `Photo linked to "${lastRem.text}"`);
         } else {
+          pendingPhotos.set(String(chatId), { msgId, text: 'Photo reminder' });
           bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?');
         }
-      } catch (err) {
-        console.error('[Photo error]', err);
-        bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?').catch(() => {});
       }
-      return;
+    } catch (err) {
+      console.error('[Photo error]', err);
+      pendingPhotos.set(String(chatId), { msgId, text: caption || 'Photo reminder' });
+      bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?').catch(() => {});
     }
+    return;
   }
 
   if (!msg.text || msg.text.startsWith('/')) return;
