@@ -71,8 +71,10 @@ export function getConversationalResponse(text) {
   const words = lower.split(/\s+/);
   const wordCount = words.length;
 
-  // Greetings (handled separately for menu — this is for variants)
-  if (/^(hey|hi|hello|yo|sup|hola|what'?s up)\b/i.test(lower)) return null; // let menu handle these
+  // Greetings — handled by menu in the main handler, but catch variants here
+  if (/^(hey|hi|hello|yo|sup|hola)\s*$/i.test(lower)) return null; // exact greetings → menu handler
+  if (/^what'?s?\s*up/i.test(lower)) return null; // "what's up" → menu handler
+  if (/^(wassup|whaddup|howdy|ayo|heya|heyy+|hii+|helloo+)/i.test(lower)) return null; // variants → menu handler
 
   // How are you — broad matching including typos
   if (/how\s*a?re?\s*(you|u|ya)|how('?s| is) it going|how do you do|how'?s everything|how you doing/i.test(lower)) return pick(howAreYou);

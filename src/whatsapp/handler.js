@@ -78,7 +78,7 @@ export async function handleTextMessage(from, text) {
   }
 
   // Greetings / Menu
-  if (['hi', 'hey', 'hello', 'menu', 'start', '/start', 'yo', 'sup'].includes(lower)) return sendMenu(from);
+  if (['hi', 'hey', 'hello', 'menu', 'start', '/start', 'yo', 'sup', "what's up", 'whats up', 'wassup', 'whaddup'].includes(lower)) return sendMenu(from);
 
   // Menu shortcuts
   if (lower === '1') return sendTextMessage(from, '📝 Just type your reminder naturally!\n\nExamples:\n• "remind me at 3pm to call dentist"\n• "in 30 minutes check the oven"\n• "every day at 9am take vitamins"');
@@ -112,7 +112,7 @@ export async function handleTextMessage(from, text) {
 
   if (!parsed) {
     return sendTextMessage(from,
-      "I couldn't understand that. Try:\n• \"remind me at 3pm to call dentist\"\n• \"in 30 minutes check the oven\"\n\nOr send *menu* to see all options."
+      "Hey! 😊 I'm not sure what you mean.\n\nIf you want to set a reminder, try:\n• \"remind me at 3pm to call dentist\"\n• \"in 30 minutes check the oven\"\n\nOr just chat — I'm friendly! Send *menu* for options."
     );
   }
 

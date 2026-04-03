@@ -171,7 +171,7 @@ bot.on('message', async (msg) => {
   }
 
   // Natural text shortcuts
-  if (['hi', 'hey', 'hello', 'menu', 'yo', 'sup'].includes(lower)) {
+  if (['hi', 'hey', 'hello', 'menu', 'yo', 'sup', "what's up", 'whats up', 'wassup', 'whaddup'].includes(lower)) {
     handleMenu(bot, msg); return;
   }
   if (['view', 'list', 'reminders', 'my reminders'].includes(lower)) {
@@ -214,10 +214,11 @@ bot.on('message', async (msg) => {
 
   if (!parsed) {
     bot.sendMessage(chatId,
-      "I couldn't understand that. Try:\n" +
+      "Hey! 😊 I'm not sure what you mean.\n\n" +
+      "If you want to set a reminder, try:\n" +
       '• "remind me at 3pm to call dentist"\n' +
       '• "in 30 minutes check the oven"\n\n' +
-      'Or send /menu to see all options.'
+      "Or just chat — I'm friendly! Send /menu for options."
     );
     return;
   }
