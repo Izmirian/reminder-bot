@@ -2,7 +2,7 @@
  * WhatsApp-specific scheduler — reuses the same DB but sends via WhatsApp API.
  */
 import cron from 'node-cron';
-import { sendReminderMessage, sendTextMessage } from './api.js';
+import { sendReminderMessage, sendTextMessage, sendImageMessage } from './api.js';
 import {
   getAllActiveReminders,
   deactivateReminder,
@@ -27,7 +27,19 @@ async function fireReminder(reminder) {
   try {
     const settings = getSettings(reminder.chat_id);
     const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes);
-    await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
+
+    // Send image first if attached
+    if (reminder.media_type === 'wa_image' && reminder.media_id) {
+      try {
+        await sendImageMessage(reminder.chat_id, reminder.media_id, contextMsg);
+      } catch (imgErr) {
+        console.error(`[WhatsApp] Failed to send image for reminder ${reminder.id}:`, imgErr.message);
+        // Fallback to text-only
+        await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
+      }
+    } else {
+      await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
+    }
     markReminderFired(reminder.id);
   } catch (err) {
     console.error(`[WhatsApp] Failed to send reminder ${reminder.id}:`, err.message);

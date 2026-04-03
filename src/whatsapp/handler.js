@@ -1,7 +1,7 @@
 /**
  * Handles incoming WhatsApp messages — parses reminders, commands, and button replies.
  */
-import { sendTextMessage, sendReminderMessage } from './api.js';
+import { sendTextMessage, sendReminderMessage, getMediaUrl, downloadMedia, uploadMedia, sendImageMessage } from './api.js';
 import { parseReminderSmart, parseReminder, detectCategory } from '../parser.js';
 import { classifyIntent } from '../ai.js';
 import {
@@ -10,7 +10,8 @@ import {
   resumeAllReminders, getPausedReminders, getSettings, setTimezone,
   setDailyDigest, updateReminderText, updateReminderTime,
   getTodaysReminders, getLastDeactivated, reactivateReminder,
-  getWeeklyStats, snoozeReminder as dbSnooze,
+  getWeeklyStats, attachMedia, getLastReminder, addNoteToReminder,
+  snoozeReminder as dbSnooze,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
 } from '../db.js';
@@ -24,6 +25,7 @@ import { getConversationalResponse } from '../conversation.js';
 // Track state
 const pendingClearAll = new Set();
 const pendingClarification = new Map();
+const pendingPhotos = new Map(); // from -> { waMediaId, mimeType, caption }
 const lastCreated = new Map();
 
 // --- Helpers ---
@@ -63,6 +65,25 @@ export async function handleTextMessage(from, text) {
     pendingClearAll.delete(from);
     if (lower === 'yes') return doClearAll(from);
     return sendTextMessage(from, 'Clear all cancelled.');
+  }
+
+  // Pending photo awaiting a time
+  if (pendingPhotos.has(from)) {
+    const photo = pendingPhotos.get(from);
+    pendingPhotos.delete(from);
+    const settings = getSettings(from);
+    const aiResult = await classifyIntent(`remind me ${text.trim()} to ${photo.text}`, settings.timezone, new Date().toISOString(), []);
+    if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+      const r = aiResult.reminders[0];
+      const id = createReminderAndSchedule(from, {
+        text: photo.text, remindAt: new Date(r.remindAt), cronExpr: null, category: null, notes: null,
+      }, settings);
+      attachMedia(id, 'wa_image', photo.mediaId);
+      const timeStr = formatTime(new Date(r.remindAt).toISOString(), settings.timezone);
+      const relTime = relativeTime(new Date(r.remindAt));
+      return sendTextMessage(from, `✅ *${photo.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
+    }
+    return sendTextMessage(from, "Couldn't understand the time. Try: \"in 30 minutes\" or \"at 3pm\"");
   }
 
   // Pending AI clarification
@@ -510,4 +531,82 @@ async function handleDigest(to, text) {
   const time = match[2] || '08:00';
   setDailyDigest(to, true, time);
   return sendTextMessage(to, `✅ Daily digest enabled at *${time}*`);
+}
+
+// --- Image handler ---
+
+export async function handleImageMessage(from, waMediaId, caption, mimeType) {
+  try {
+    const settings = getSettings(from);
+
+    // Download the image and re-upload to get a persistent media ID
+    const mediaUrl = await getMediaUrl(waMediaId);
+    let storedMediaId = waMediaId; // fallback to original ID
+
+    if (mediaUrl) {
+      const buffer = await downloadMedia(mediaUrl);
+      if (buffer) {
+        const uploaded = await uploadMedia(buffer, mimeType);
+        if (uploaded) storedMediaId = uploaded;
+      }
+    }
+
+    if (caption) {
+      // Photo with caption — try to parse as reminder
+      const activeRems = getActiveReminders(from);
+      const aiResult = await classifyIntent(caption, settings.timezone, new Date().toISOString(), activeRems);
+
+      if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+        const r = aiResult.reminders[0];
+        const parsed = {
+          text: r.text, remindAt: new Date(r.remindAt), cronExpr: r.cronExpr || null,
+          category: r.category || null, notes: r.notes || null,
+        };
+        const id = createReminderAndSchedule(from, parsed, settings);
+        attachMedia(id, 'wa_image', storedMediaId);
+        const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
+        const relTime = relativeTime(parsed.remindAt);
+        return sendTextMessage(from, `✅ *${parsed.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
+      }
+
+      // Try chrono fallback
+      const parsed = parseReminder(caption, settings.timezone);
+      if (parsed) {
+        const id = createReminderAndSchedule(from, parsed, settings);
+        attachMedia(id, 'wa_image', storedMediaId);
+        const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
+        const relTime = relativeTime(parsed.remindAt);
+        return sendTextMessage(from, `✅ *${parsed.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
+      }
+
+      // Can't parse — store photo, ask when
+      pendingPhotos.set(from, { mediaId: storedMediaId, text: caption });
+      return sendTextMessage(from, 'Got the photo! When should I remind you?');
+    }
+
+    // No caption — attach to last reminder or ask
+    const lastRem = getLastReminder(from);
+    if (lastRem) {
+      attachMedia(lastRem.id, 'wa_image', storedMediaId);
+      return sendTextMessage(from, `Photo linked to "${lastRem.text}"`);
+    }
+
+    pendingPhotos.set(from, { mediaId: storedMediaId, text: 'Photo reminder' });
+    return sendTextMessage(from, 'Got the photo! When should I remind you about it?');
+  } catch (err) {
+    console.error('[WA Image error]', err);
+    return sendTextMessage(from, 'Got the photo! When should I remind you about it?');
+  }
+}
+
+// Helper to create + schedule a reminder and return the ID
+function createReminderAndSchedule(from, parsed, settings) {
+  const id = createReminder({
+    chatId: from, text: parsed.text, remindAt: parsed.remindAt.toISOString(),
+    cronExpr: parsed.cronExpr, timezone: settings.timezone, category: parsed.category,
+  });
+  if (parsed.notes) addNoteToReminder(id, parsed.notes);
+  const reminder = getReminder(id);
+  scheduleReminder(reminder);
+  return id;
 }
