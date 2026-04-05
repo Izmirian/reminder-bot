@@ -46,8 +46,10 @@ export function createWebhookServer() {
           for (const msg of messages) {
             const from = msg.from; // sender's phone number
 
+            const quotedMsgId = msg.context?.id || null;
+
             if (msg.type === 'text') {
-              await handleTextMessage(from, msg.text.body);
+              await handleTextMessage(from, msg.text.body, quotedMsgId);
             } else if (msg.type === 'image') {
               const imageId = msg.image?.id;
               const caption = msg.image?.caption || '';

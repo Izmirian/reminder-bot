@@ -25,6 +25,7 @@ import {
 import {
   scheduleReminder, cancelReminder,
   snoozeReminder as schedSnooze,
+  messageReminderMap,
 } from './scheduler.js';
 import { detectRecurringPattern } from '../patterns.js';
 import { getConversationalResponse } from '../conversation.js';
@@ -64,8 +65,66 @@ function formatTime(isoStr, timezone) {
 
 // --- Main message handler ---
 
-export async function handleTextMessage(from, text) {
+export async function handleTextMessage(from, text, quotedMsgId = null) {
   const lower = text.trim().toLowerCase();
+
+  // Check if this is a reply to a bot message linked to a reminder
+  if (quotedMsgId) {
+    const reminderId = messageReminderMap.get(quotedMsgId);
+    if (reminderId) {
+      const reminder = await getReminder(reminderId);
+      if (reminder && reminder.active === 1) {
+        // Simple keyword shortcuts
+        if (/^done$/i.test(lower)) {
+          cancelReminder(reminderId);
+          await deactivateReminder(reminderId);
+          await logCompletedReminder({ chatId: from, text: reminder.text, remindAt: reminder.remind_at });
+          return sendTextMessage(from, 'Done!');
+        }
+        if (/^cancel$/i.test(lower)) {
+          cancelReminder(reminderId);
+          await deactivateReminder(reminderId);
+          return sendTextMessage(from, `Cancelled "${reminder.text}"`);
+        }
+
+        // Route through AI with this specific reminder as context
+        const settings = await getSettings(from);
+        const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString(), [reminder]);
+        if (aiResult?.intent === 'action') {
+          if (aiResult.action === 'cancel') {
+            cancelReminder(reminderId);
+            await deactivateReminder(reminderId);
+            return sendTextMessage(from, `Cancelled "${reminder.text}"`);
+          }
+          if (aiResult.action === 'reschedule' && aiResult.newTime) {
+            cancelReminder(reminderId);
+            await updateReminderTime(reminderId, new Date(aiResult.newTime).toISOString());
+            scheduleReminder({ ...reminder, remind_at: new Date(aiResult.newTime).toISOString() });
+            const timeStr = formatTime(new Date(aiResult.newTime).toISOString(), settings.timezone);
+            return sendTextMessage(from, `Rescheduled "${reminder.text}" to ${timeStr}`);
+          }
+          if (aiResult.action === 'edit' && aiResult.newText) {
+            await updateReminderText(reminderId, aiResult.newText);
+            return sendTextMessage(from, `Updated: "${aiResult.newText}"`);
+          }
+          if (aiResult.action === 'add_note' && aiResult.note) {
+            await addNoteToReminder(reminderId, aiResult.note);
+            return sendTextMessage(from, `Note added to "${reminder.text}": ${aiResult.note}`);
+          }
+        }
+        // Check for snooze-like patterns
+        const snoozeMatch = text.match(/(\d+)\s*(min|minute|hour|hr)/i);
+        if (snoozeMatch) {
+          let mins = parseInt(snoozeMatch[1], 10);
+          if (/hour|hr/i.test(snoozeMatch[2])) mins *= 60;
+          await dbSnooze(reminderId, new Date(Date.now() + mins * 60 * 1000).toISOString());
+          await schedSnooze(reminderId, mins);
+          const label = mins >= 60 ? `${mins / 60} hour(s)` : `${mins} minutes`;
+          return sendTextMessage(from, `Snoozed "${reminder.text}" for ${label}`);
+        }
+      }
+    }
+  }
 
   // Pending clear all confirmation
   if (pendingClearAll.has(from)) {
@@ -278,9 +337,12 @@ async function saveAndConfirm(from, parsed, settings) {
   const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[parsed.category] || '';
   const recurLabel = parsed.cronExpr ? '\n🔁 Recurring' : '';
 
-  return sendTextMessage(from,
+  const apiResult = await sendTextMessage(from,
     `✅ Reminder set! ${catEmoji}\n\n📝 *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}`
   );
+  // Track message ID for reply-to feature
+  const wamid = apiResult?.messages?.[0]?.id;
+  if (wamid) messageReminderMap.set(wamid, id);
 }
 
 /**
@@ -566,7 +628,10 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
         await attachMediaWithData(id, 'wa_image', mimeType, imageBuffer);
         const timeStr = formatTime(new Date(r.remindAt).toISOString(), settings.timezone);
         const relTime = relativeTime(new Date(r.remindAt));
-        return sendTextMessage(from, `✅ *${r.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
+        const res = await sendTextMessage(from, `✅ *${r.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
+        const wamid = res?.messages?.[0]?.id;
+        if (wamid) messageReminderMap.set(wamid, id);
+        return res;
       }
 
       const parsed = parseReminder(caption, settings.timezone);

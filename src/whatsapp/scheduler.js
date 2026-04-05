@@ -16,6 +16,9 @@ import { buildContextualMessage } from '../context.js';
 
 const activeJobs = new Map();
 
+// Map WhatsApp message IDs (wamid) to reminder IDs (for reply-to feature)
+export const messageReminderMap = new Map(); // wamid -> reminderId
+
 function getNextCronDate() {
   const next = new Date();
   next.setSeconds(0, 0);
@@ -30,22 +33,26 @@ async function fireReminder(reminder) {
 
     // Send image if attached — upload from stored binary, then send
     console.log(`[WA Fire] id=${reminder.id} media_type=${reminder.media_type} has_data=${!!reminder.media_data} data_len=${reminder.media_data?.length || 0}`);
+    let apiResult;
     if (reminder.media_type === 'wa_image' && reminder.media_data) {
       try {
         const mimeType = reminder.media_id || 'image/jpeg'; // media_id stores mime type
         const freshMediaId = await uploadMedia(reminder.media_data, mimeType);
         if (freshMediaId) {
-          await sendImageMessage(reminder.chat_id, freshMediaId, contextMsg);
+          apiResult = await sendImageMessage(reminder.chat_id, freshMediaId, contextMsg);
         } else {
-          await sendReminderMessage(reminder.chat_id, contextMsg + '\n(photo could not be loaded)', reminder.id);
+          apiResult = await sendReminderMessage(reminder.chat_id, contextMsg + '\n(photo could not be loaded)', reminder.id);
         }
       } catch (imgErr) {
         console.error(`[WhatsApp] Failed to send image for reminder ${reminder.id}:`, imgErr.message);
-        await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
+        apiResult = await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
       }
     } else {
-      await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
+      apiResult = await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
     }
+    // Track message ID for reply-to feature
+    const wamid = apiResult?.messages?.[0]?.id;
+    if (wamid) messageReminderMap.set(wamid, reminder.id);
     await markReminderFired(reminder.id);
   } catch (err) {
     console.error(`[WhatsApp] Failed to send reminder ${reminder.id}:`, err.message);

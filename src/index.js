@@ -17,6 +17,7 @@ import {
   setupDailyDigest,
   snoozeReminder as schedSnooze,
   cancelReminder,
+  messageReminderMap,
 } from './scheduler.js';
 import {
   handleMenu, handleHelp, handleSet, handleList, handleToday,
@@ -198,6 +199,82 @@ bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text.trim();
   const lower = text.toLowerCase();
+
+  // Check if this is a reply to a bot message linked to a reminder
+  if (msg.reply_to_message) {
+    const repliedMsgId = msg.reply_to_message.message_id;
+    const reminderId = messageReminderMap.get(repliedMsgId);
+    if (reminderId) {
+      const reminder = await getReminder(reminderId);
+      if (reminder && reminder.active === 1) {
+        const settings = await getSettings(String(chatId));
+        const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString(), [reminder]);
+        if (aiResult) {
+          if (aiResult.intent === 'action') {
+            const ids = aiResult.ids || [reminderId];
+            if (aiResult.action === 'cancel') {
+              cancelReminder(reminderId);
+              await deactivateReminder(reminderId);
+              bot.sendMessage(chatId, `Cancelled "${reminder.text}"`);
+              return;
+            }
+            if (aiResult.action === 'reschedule' && aiResult.newTime) {
+              cancelReminder(reminderId);
+              const { updateReminderTime: updateTime } = await import('./db.js');
+              await updateTime(reminderId, new Date(aiResult.newTime).toISOString());
+              const { scheduleReminder: sched } = await import('./scheduler.js');
+              sched({ ...reminder, remind_at: new Date(aiResult.newTime).toISOString() });
+              const timeStr = new Date(aiResult.newTime).toLocaleString('en-US', {
+                timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', hour12: true,
+              });
+              bot.sendMessage(chatId, `Rescheduled "${reminder.text}" to ${timeStr}`);
+              return;
+            }
+            if (aiResult.action === 'edit' && aiResult.newText) {
+              const { updateReminderText: updateText } = await import('./db.js');
+              await updateText(reminderId, aiResult.newText);
+              bot.sendMessage(chatId, `Updated: "${aiResult.newText}"`);
+              return;
+            }
+            if (aiResult.action === 'add_note' && aiResult.note) {
+              await addNoteToReminder(reminderId, aiResult.note);
+              bot.sendMessage(chatId, `Note added to "${reminder.text}": ${aiResult.note}`);
+              return;
+            }
+          }
+          // Handle snooze keywords directly
+          if (aiResult.intent === 'chat' || aiResult.intent === 'reminder') {
+            // Check for simple snooze-like patterns
+            const snoozeMatch = text.match(/(\d+)\s*(min|minute|hour|hr)/i);
+            if (snoozeMatch) {
+              let mins = parseInt(snoozeMatch[1], 10);
+              if (/hour|hr/i.test(snoozeMatch[2])) mins *= 60;
+              await dbSnooze(reminderId, new Date(Date.now() + mins * 60 * 1000).toISOString());
+              await schedSnooze(reminderId, mins);
+              const label = mins >= 60 ? `${mins / 60} hour(s)` : `${mins} minutes`;
+              bot.sendMessage(chatId, `Snoozed "${reminder.text}" for ${label}`);
+              return;
+            }
+          }
+        }
+        // Fallback for simple replies like "done", "cancel", "snooze"
+        if (/^done$/i.test(lower)) {
+          cancelReminder(reminderId);
+          await deactivateReminder(reminderId);
+          await logCompletedReminder({ chatId: String(chatId), text: reminder.text, remindAt: reminder.remind_at });
+          bot.sendMessage(chatId, 'Done!');
+          return;
+        }
+        if (/^cancel$/i.test(lower)) {
+          cancelReminder(reminderId);
+          await deactivateReminder(reminderId);
+          bot.sendMessage(chatId, `Cancelled "${reminder.text}"`);
+          return;
+        }
+      }
+    }
+  }
 
   // Check for pending photo awaiting a time
   if (pendingPhotos.has(String(chatId))) {
@@ -426,9 +503,10 @@ async function saveAndConfirm(chatId, parsed, settings) {
   const hasPhoto = parsed.mediaType === 'reply' || pendingPhotos.has(String(chatId));
   const mediaLabel = hasPhoto ? '\nPhoto linked' : parsed.mediaType === 'link' ? `\n${parsed.mediaId}` : '';
 
-  bot.sendMessage(
+  const sentMsg = await bot.sendMessage(
     chatId,
     `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${noteLabel}${mediaLabel}`,
     { parse_mode: 'Markdown' }
   );
+  if (sentMsg) messageReminderMap.set(sentMsg.message_id, id);
 }

@@ -16,6 +16,9 @@ import { buildContextualMessage } from './context.js';
 const activeJobs = new Map(); // reminderId -> { timeout?, cron? }
 let botInstance = null;
 
+// Map bot message IDs to reminder IDs (for reply-to feature)
+export const messageReminderMap = new Map(); // botMessageId -> reminderId
+
 export function init(bot) {
   botInstance = bot;
 }
@@ -58,22 +61,25 @@ async function fireReminder(reminder) {
   const options = buildSnoozeKeyboard(reminder.id);
 
   try {
+    let sentMsg;
     if (reminder.media_type === 'reply' && reminder.media_id) {
       // Reply to the original message (photo/media) so user sees it linked
-      await botInstance.sendMessage(reminder.chat_id, message, {
+      sentMsg = await botInstance.sendMessage(reminder.chat_id, message, {
         ...options,
         reply_to_message_id: parseInt(reminder.media_id, 10),
       });
     } else if (reminder.media_type === 'link' && reminder.media_id) {
-      await botInstance.sendMessage(reminder.chat_id, `${message}\n\n${reminder.media_id}`, options);
+      sentMsg = await botInstance.sendMessage(reminder.chat_id, `${message}\n\n${reminder.media_id}`, options);
     } else {
-      await botInstance.sendMessage(reminder.chat_id, message, options);
+      sentMsg = await botInstance.sendMessage(reminder.chat_id, message, options);
     }
+    if (sentMsg) messageReminderMap.set(sentMsg.message_id, reminder.id);
     await markReminderFired(reminder.id);
   } catch (err) {
     // If reply fails (message deleted), send without reply
     try {
-      await botInstance.sendMessage(reminder.chat_id, message, options);
+      const sentMsg = await botInstance.sendMessage(reminder.chat_id, message, options);
+      if (sentMsg) messageReminderMap.set(sentMsg.message_id, reminder.id);
       await markReminderFired(reminder.id);
     } catch (err2) {
       console.error(`Failed to send reminder ${reminder.id}:`, err2.message);
