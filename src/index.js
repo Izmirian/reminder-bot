@@ -564,6 +564,7 @@ bot.on('message', async (msg) => {
             category: r.category || detectCategory(r.text),
             notes: r.notes || null,
             priority: r.priority || 'normal',
+            sharedWith: r.sharedWith || null,
             mediaType: urlMatch ? 'link' : null,
             mediaId: urlMatch ? urlMatch[1] : null,
           };
@@ -603,6 +604,8 @@ async function saveAndConfirm(chatId, parsed, settings) {
     timezone: settings.timezone,
     category: parsed.category,
     priority: parsed.priority,
+    sharedWith: parsed.sharedWith,
+    createdBy: String(chatId),
   });
 
   // Save notes if present
@@ -631,12 +634,13 @@ async function saveAndConfirm(chatId, parsed, settings) {
   const recurLabel = parsed.cronExpr ? '\nRecurring' : '';
   const noteLabel = parsed.notes ? `\nNote: ${parsed.notes}` : '';
   const priorityLabel = parsed.priority === 'urgent' ? '\nURGENT' : parsed.priority === 'low' ? '\nLow priority' : '';
+  const sharedLabel = parsed.sharedWith?.length ? `\nShared with ${parsed.sharedWith.length} recipient${parsed.sharedWith.length === 1 ? '' : 's'}` : '';
   const hasPhoto = parsed.mediaType === 'reply' || pendingPhotos.has(String(chatId));
   const mediaLabel = hasPhoto ? '\nPhoto linked' : parsed.mediaType === 'link' ? `\n${parsed.mediaId}` : '';
 
   const sentMsg = await bot.sendMessage(
     chatId,
-    `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${priorityLabel}${noteLabel}${mediaLabel}`,
+    `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${priorityLabel}${sharedLabel}${noteLabel}${mediaLabel}`,
     { parse_mode: 'Markdown' }
   );
   if (sentMsg) messageReminderMap.set(sentMsg.message_id, id);

@@ -62,6 +62,18 @@ async function fireReminder(reminder) {
     console.error(`[WhatsApp] Failed to send reminder ${reminder.id}:`, err.message);
   }
 
+  // Send to shared recipients
+  if (reminder.shared_with) {
+    try {
+      const sharedIds = JSON.parse(reminder.shared_with);
+      for (const recipientId of sharedIds) {
+        try {
+          await sendTextMessage(recipientId, `*Shared reminder:* ${contextMsg}`);
+        } catch (e) { console.error(`[WhatsApp] Failed shared reminder to ${recipientId}:`, e.message); }
+      }
+    } catch {}
+  }
+
   // Urgent reminders: re-fire every 5 min up to 3 times if no response
   if (reminder.priority === 'urgent') {
     await incrementFireCount(reminder.id);

@@ -49,8 +49,9 @@ function buildPrompt(activeReminders) {
 Classify the message into one of these intents and return a JSON object:
 
 1. **"reminder"** — The user wants to set one or more reminders.
-   Return: { "intent": "reminder", "reminders": [{ "text": "...", "remindAt": "ISO8601", "cronExpr": "cron or null", "category": "health|work|personal|null", "notes": "extra info or null", "priority": "low|normal|urgent" }] }
+   Return: { "intent": "reminder", "reminders": [{ "text": "...", "remindAt": "ISO8601", "cronExpr": "cron or null", "category": "health|work|personal|null", "notes": "extra info or null", "priority": "low|normal|urgent", "sharedWith": ["phone_or_id"] or null }] }
    - Priority detection: "urgent", "important", "ASAP", "critical", "don't forget!", ALL CAPS emphasis, exclamation marks = "urgent". "low priority", "whenever", "not important" = "low". Default = "normal".
+   - Shared reminders: "remind me and 962791234567 about dinner" → sharedWith=["962791234567"]. "remind me and mom" → sharedWith=null (can't resolve names to IDs). Only include phone numbers or exact IDs the user provides.
    - If the message contains MULTIPLE reminders, return multiple items in the array.
    - If a message has a main task AND extra context/details, create ONE reminder with the task as "text" and the extra info as "notes".
    - "notes" is for ANY supplementary information: amounts, details, what to bring, context, reasons, etc.

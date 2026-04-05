@@ -84,6 +84,8 @@ async function initPostgres() {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal'`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS fire_count INTEGER DEFAULT 0`);
+    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS shared_with TEXT`);
+    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS created_by TEXT`);
   } catch {}
 
   isPostgres = true;
@@ -183,10 +185,10 @@ async function insert(sql, params = []) {
 
 // --- Reminder CRUD ---
 
-export async function createReminder({ chatId, text, remindAt, cronExpr, timezone, category, priority }) {
+export async function createReminder({ chatId, text, remindAt, cronExpr, timezone, category, priority, sharedWith, createdBy }) {
   return insert(
-    'INSERT INTO reminders (chat_id, text, remind_at, cron_expr, timezone, category, priority) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [chatId, text, remindAt, cronExpr || null, timezone || 'UTC', category || null, priority || 'normal']
+    'INSERT INTO reminders (chat_id, text, remind_at, cron_expr, timezone, category, priority, shared_with, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [chatId, text, remindAt, cronExpr || null, timezone || 'UTC', category || null, priority || 'normal', sharedWith ? JSON.stringify(sharedWith) : null, createdBy || null]
   );
 }
 

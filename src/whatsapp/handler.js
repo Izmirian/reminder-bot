@@ -295,6 +295,7 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
             priority: r.priority || 'normal',
+            sharedWith: r.sharedWith || null,
           };
           await saveAndConfirm(from, parsed, settings);
         }
@@ -358,13 +359,14 @@ async function saveAndConfirm(from, parsed, settings) {
   const id = await createReminder({
     chatId: from, text: parsed.text, remindAt: parsed.remindAt.toISOString(),
     cronExpr: parsed.cronExpr, timezone: settings.timezone, category: parsed.category,
-    priority: parsed.priority,
+    priority: parsed.priority, sharedWith: parsed.sharedWith, createdBy: from,
   });
 
   scheduleReminder({
     id, chat_id: from, text: parsed.text,
     remind_at: parsed.remindAt.toISOString(), cron_expr: parsed.cronExpr,
     category: parsed.category, priority: parsed.priority,
+    shared_with: parsed.sharedWith ? JSON.stringify(parsed.sharedWith) : null,
   });
 
   const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
@@ -372,9 +374,10 @@ async function saveAndConfirm(from, parsed, settings) {
   const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[parsed.category] || '';
   const recurLabel = parsed.cronExpr ? '\n🔁 Recurring' : '';
   const priorityLabel = parsed.priority === 'urgent' ? '\nURGENT' : parsed.priority === 'low' ? '\nLow priority' : '';
+  const sharedLabel = parsed.sharedWith?.length ? `\nShared with ${parsed.sharedWith.length} recipient${parsed.sharedWith.length === 1 ? '' : 's'}` : '';
 
   const apiResult = await sendTextMessage(from,
-    `✅ Reminder set! ${catEmoji}\n\n📝 *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}${priorityLabel}`
+    `✅ Reminder set! ${catEmoji}\n\n📝 *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}${priorityLabel}${sharedLabel}`
   );
   // Track message ID for reply-to feature
   const wamid = apiResult?.messages?.[0]?.id;

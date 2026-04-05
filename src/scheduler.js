@@ -127,6 +127,18 @@ async function fireReminder(reminder) {
     }
   }
 
+  // Send to shared recipients
+  if (reminder.shared_with) {
+    try {
+      const sharedIds = JSON.parse(reminder.shared_with);
+      for (const recipientId of sharedIds) {
+        try {
+          await botInstance.sendMessage(recipientId, `*Shared reminder:* ${message}`, { parse_mode: 'Markdown' });
+        } catch (e) { console.error(`Failed to send shared reminder to ${recipientId}:`, e.message); }
+      }
+    } catch {}
+  }
+
   // Urgent reminders: re-fire every 5 min up to 3 times if no response
   if (reminder.priority === 'urgent') {
     await incrementFireCount(reminder.id);
