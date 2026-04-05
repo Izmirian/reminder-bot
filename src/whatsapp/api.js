@@ -81,8 +81,8 @@ export async function sendButtonMessage(to, bodyText, buttons) {
  */
 export async function sendReminderMessage(to, reminderText, reminderId) {
   const buttons = [
-    { id: `snooze:${reminderId}:5`, title: '5 min' },
     { id: `snooze:${reminderId}:15`, title: '15 min' },
+    { id: `snooze:${reminderId}:60`, title: '1 hour' },
     { id: `done:${reminderId}`, title: 'Done' },
   ];
 
