@@ -19,6 +19,7 @@ import {
   getTodaysReminders, getLastDeactivated, reactivateReminder,
   getWeeklyStats, attachMedia, attachMediaWithData, getLastReminder, addNoteToReminder, searchReminders,
   updateStreak, getAllStreaks,
+  createUrlMonitor, getUserMonitors, deactivateMonitor,
   snoozeReminder as dbSnooze,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
@@ -258,6 +259,29 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
           }
         }
         return;
+      }
+    }
+
+    if (aiResult.intent === 'monitor') {
+      if (aiResult.action === 'create' && aiResult.url) {
+        await createUrlMonitor({ chatId: from, url: aiResult.url, label: aiResult.label, checkType: aiResult.type || 'change' });
+        const typeLabel = aiResult.type === 'price' ? 'price changes' : 'content changes';
+        return sendTextMessage(from, `Watching for ${typeLabel}:\n*${aiResult.label || aiResult.url}*\nChecks every 30 minutes.`);
+      }
+      if (aiResult.action === 'list') {
+        const monitors = await getUserMonitors(from);
+        if (monitors.length === 0) return sendTextMessage(from, 'No active monitors. Say "watch [url] for changes" to start.');
+        let msg = '*Your URL Monitors*\n';
+        for (const m of monitors) {
+          const typeLabel = m.check_type === 'price' ? 'price' : 'changes';
+          const checked = m.last_checked ? new Date(m.last_checked).toLocaleString('en-US', { timeZone: settings.timezone, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'never';
+          msg += `\n*#${m.id}* ${m.label || m.url}\n  Watching: ${typeLabel} | Last checked: ${checked}`;
+        }
+        return sendTextMessage(from, msg);
+      }
+      if (aiResult.action === 'stop' && aiResult.id) {
+        await deactivateMonitor(aiResult.id);
+        return sendTextMessage(from, `Stopped monitoring #${aiResult.id}`);
       }
     }
 

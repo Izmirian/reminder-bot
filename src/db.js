@@ -79,6 +79,22 @@ async function initPostgres() {
     )
   `);
 
+  // URL monitors table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS url_monitors (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      url TEXT NOT NULL,
+      label TEXT,
+      check_type TEXT DEFAULT 'change',
+      last_hash TEXT,
+      last_price REAL,
+      last_checked TIMESTAMPTZ,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   // Migrations
   try {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
@@ -467,4 +483,33 @@ export async function getStreak(chatId, reminderText) {
 
 export async function getAllStreaks(chatId) {
   return (await query('SELECT * FROM streaks WHERE chat_id = ? AND current_streak > 0 ORDER BY current_streak DESC', [chatId])).rows;
+}
+
+// --- URL Monitors ---
+
+export async function createUrlMonitor({ chatId, url, label, checkType }) {
+  return insert(
+    'INSERT INTO url_monitors (chat_id, url, label, check_type) VALUES (?, ?, ?, ?)',
+    [chatId, url, label || null, checkType || 'change']
+  );
+}
+
+export async function getActiveMonitors() {
+  return (await query('SELECT * FROM url_monitors WHERE active = 1')).rows;
+}
+
+export async function getUserMonitors(chatId) {
+  return (await query('SELECT * FROM url_monitors WHERE chat_id = ? AND active = 1 ORDER BY created_at DESC', [chatId])).rows;
+}
+
+export async function updateMonitorHash(id, hash) {
+  await run('UPDATE url_monitors SET last_hash = ?, last_checked = NOW() WHERE id = ?', [hash, id]);
+}
+
+export async function updateMonitorPrice(id, price) {
+  await run('UPDATE url_monitors SET last_price = ?, last_checked = NOW() WHERE id = ?', [price, id]);
+}
+
+export async function deactivateMonitor(id) {
+  await run('UPDATE url_monitors SET active = 0 WHERE id = ?', [id]);
 }

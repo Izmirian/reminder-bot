@@ -7,6 +7,7 @@ import {
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder, resetFireCount,
   updateStreak, getAllStreaks, setLocation,
+  createUrlMonitor, getUserMonitors, deactivateMonitor,
 } from './db.js';
 import { parseReminderSmart, parseReminder, detectCategory } from './parser.js';
 import { classifyIntent } from './ai.js';
@@ -518,6 +519,35 @@ bot.on('message', async (msg) => {
             bot.sendMessage(chatId, `📝 Note added to "${r.text}": ${aiResult.note}`);
           }
         }
+        return;
+      }
+    }
+
+    if (aiResult.intent === 'monitor') {
+      if (aiResult.action === 'create' && aiResult.url) {
+        const id = await createUrlMonitor({
+          chatId: String(chatId), url: aiResult.url,
+          label: aiResult.label, checkType: aiResult.type || 'change',
+        });
+        const typeLabel = aiResult.type === 'price' ? 'price changes' : 'content changes';
+        bot.sendMessage(chatId, `Watching for ${typeLabel}:\n*${aiResult.label || aiResult.url}*\nChecks every 30 minutes.`, { parse_mode: 'Markdown' });
+        return;
+      }
+      if (aiResult.action === 'list') {
+        const monitors = await getUserMonitors(String(chatId));
+        if (monitors.length === 0) { bot.sendMessage(chatId, 'No active monitors. Say "watch [url] for changes" to start.'); return; }
+        let msg = '*Your URL Monitors*\n';
+        for (const m of monitors) {
+          const typeLabel = m.check_type === 'price' ? 'price' : 'changes';
+          const checked = m.last_checked ? new Date(m.last_checked).toLocaleString('en-US', { timeZone: settings.timezone, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'never';
+          msg += `\n*#${m.id}* ${m.label || m.url}\n  Watching: ${typeLabel} | Last checked: ${checked}`;
+        }
+        bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+        return;
+      }
+      if (aiResult.action === 'stop' && aiResult.id) {
+        await deactivateMonitor(aiResult.id);
+        bot.sendMessage(chatId, `Stopped monitoring #${aiResult.id}`);
         return;
       }
     }

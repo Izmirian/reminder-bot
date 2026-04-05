@@ -384,4 +384,24 @@ export function setupDailyDigest() {
       }
     }
   });
+
+  // URL monitor check — every 30 minutes
+  cron.schedule('*/30 * * * *', async () => {
+    if (!botInstance) return;
+    try {
+      const { checkAllMonitors } = await import('./url-monitor.js');
+      const alerts = await checkAllMonitors();
+      for (const alert of alerts) {
+        const label = alert.monitor.label || alert.monitor.url;
+        const msg = `*URL Alert: ${label}*\n${alert.details}\n${alert.monitor.url}`;
+        try {
+          await botInstance.sendMessage(alert.monitor.chat_id, msg, { parse_mode: 'Markdown' });
+        } catch (err) {
+          console.error(`Failed to send URL alert to ${alert.monitor.chat_id}:`, err.message);
+        }
+      }
+    } catch (err) {
+      console.error('[URL Monitor] Check failed:', err.message);
+    }
+  });
 }

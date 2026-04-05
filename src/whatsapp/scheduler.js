@@ -239,4 +239,22 @@ export function setupWhatsAppDigest() {
       }
     }
   });
+
+  // URL monitor check — every 30 minutes (WhatsApp recipients)
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      const { checkAllMonitors } = await import('../url-monitor.js');
+      const alerts = await checkAllMonitors();
+      for (const alert of alerts) {
+        // Only send to WhatsApp chat IDs (10+ digits)
+        if (alert.monitor.chat_id.length >= 10 && /^\d+$/.test(alert.monitor.chat_id)) {
+          const label = alert.monitor.label || alert.monitor.url;
+          const msg = `*URL Alert: ${label}*\n${alert.details}\n${alert.monitor.url}`;
+          try { await sendTextMessage(alert.monitor.chat_id, msg); } catch {}
+        }
+      }
+    } catch (err) {
+      console.error('[WhatsApp URL Monitor] Check failed:', err.message);
+    }
+  });
 }

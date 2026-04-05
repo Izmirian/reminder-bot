@@ -89,7 +89,15 @@ Classify the message into one of these intents and return a JSON object:
    - "note: bring the documents" or "add note to factory reminder: need 15k" → action=add_note, match reminder, include note
    - If you can't determine which reminder, return: { "intent": "action", "needsInfo": "Which reminder? ..." }
 
-5. **"search"** — The user wants to find past or current reminders.
+5. **"monitor"** — The user wants to watch a URL for changes or price drops.
+   Return: { "intent": "monitor", "action": "create|list|stop", "url": "full URL or null", "label": "short name or null", "type": "change|price", "id": number or null }
+   - "watch amazon.com/dp/B123 for price drops" → action=create, url="https://amazon.com/dp/B123", type="price"
+   - "monitor example.com for changes" → action=create, url="https://example.com", type="change"
+   - "list my monitors" or "what am I watching?" → action=list
+   - "stop monitoring 1" or "stop watching amazon" → action=stop
+   - Always include https:// if not in the URL
+
+6. **"search"** — The user wants to find past or current reminders.
    Return: { "intent": "search", "query": "search text or null", "dateRange": { "from": "ISO8601", "to": "ISO8601" } or null }
    - "what did I have last Tuesday" → search with dateRange for last Tuesday full day
    - "search groceries" → query="groceries", no dateRange
