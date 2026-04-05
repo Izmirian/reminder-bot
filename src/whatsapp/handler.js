@@ -18,6 +18,7 @@ import {
   setDailyDigest, updateReminderText, updateReminderTime,
   getTodaysReminders, getLastDeactivated, reactivateReminder,
   getWeeklyStats, attachMedia, attachMediaWithData, getLastReminder, addNoteToReminder, searchReminders,
+  updateStreak, getAllStreaks,
   snoozeReminder as dbSnooze,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
@@ -202,6 +203,13 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       if (cmd === 'resume') return handleResume(from);
       if (cmd === 'undo') return handleUndo(from);
       if (cmd === 'summary') return handleWeekly(from);
+      if (cmd === 'streaks') {
+        const streaks = await getAllStreaks(from);
+        if (streaks.length === 0) return sendTextMessage(from, 'No active streaks yet. Complete recurring reminders to build streaks!');
+        let msg2 = '*Your Streaks*\n';
+        for (const s of streaks) msg2 += `\n*${s.reminder_text}*\nCurrent: ${s.current_streak} days | Best: ${s.longest_streak} days`;
+        return sendTextMessage(from, msg2);
+      }
       if (cmd === 'repeat') return handleRepeat(from);
     }
 
@@ -282,6 +290,7 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
             remindAt: new Date(r.remindAt),
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
+            priority: r.priority || 'normal',
           };
           await saveAndConfirm(from, parsed, settings);
         }
@@ -345,20 +354,23 @@ async function saveAndConfirm(from, parsed, settings) {
   const id = await createReminder({
     chatId: from, text: parsed.text, remindAt: parsed.remindAt.toISOString(),
     cronExpr: parsed.cronExpr, timezone: settings.timezone, category: parsed.category,
+    priority: parsed.priority,
   });
 
   scheduleReminder({
     id, chat_id: from, text: parsed.text,
-    remind_at: parsed.remindAt.toISOString(), cron_expr: parsed.cronExpr, category: parsed.category,
+    remind_at: parsed.remindAt.toISOString(), cron_expr: parsed.cronExpr,
+    category: parsed.category, priority: parsed.priority,
   });
 
   const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
   const relTime = relativeTime(parsed.remindAt);
   const catEmoji = { health: '🏥', work: '💼', personal: '🏠' }[parsed.category] || '';
   const recurLabel = parsed.cronExpr ? '\n🔁 Recurring' : '';
+  const priorityLabel = parsed.priority === 'urgent' ? '\nURGENT' : parsed.priority === 'low' ? '\nLow priority' : '';
 
   const apiResult = await sendTextMessage(from,
-    `✅ Reminder set! ${catEmoji}\n\n📝 *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}`
+    `✅ Reminder set! ${catEmoji}\n\n📝 *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}${priorityLabel}`
   );
   // Track message ID for reply-to feature
   const wamid = apiResult?.messages?.[0]?.id;
@@ -404,7 +416,14 @@ export async function handleButtonReply(from, buttonId) {
     await resetSnoozeCount(reminderId);
     await clearIgnoredSince(reminderId);
 
-    await sendTextMessage(from, '✅ Done!');
+    // Track streak for recurring reminders
+    let streakMsg = '';
+    if (reminder?.cron_expr) {
+      const streak = await updateStreak(from, reminder.text, reminder.cron_expr);
+      if (streak > 1) streakMsg = `\n${streak}-day streak!`;
+    }
+
+    await sendTextMessage(from, `✅ Done!${streakMsg}`);
 
     // Check for recurring patterns
     const patterns = await detectRecurringPattern(from);

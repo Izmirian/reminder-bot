@@ -5,7 +5,8 @@ import {
   snoozeReminder as dbSnooze, deactivateReminder, addNoteToReminder,
   attachMedia, getLastReminder, searchReminders,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
-  clearIgnoredSince, logCompletedReminder,
+  clearIgnoredSince, logCompletedReminder, resetFireCount,
+  updateStreak, getAllStreaks,
 } from './db.js';
 import { parseReminderSmart, parseReminder, detectCategory } from './parser.js';
 import { classifyIntent } from './ai.js';
@@ -116,11 +117,19 @@ bot.on('callback_query', async (query) => {
     cancelReminder(reminderId);
     await deactivateReminder(reminderId);
     await resetSnoozeCount(reminderId);
+    await resetFireCount(reminderId);
     await clearIgnoredSince(reminderId);
+
+    // Track streak for recurring reminders
+    let streakMsg = '';
+    if (reminder?.cron_expr) {
+      const streak = await updateStreak(String(chatId), reminder.text, reminder.cron_expr);
+      if (streak > 1) streakMsg = `\n${streak}-day streak!`;
+    }
 
     await bot.answerCallbackQuery(query.id, { text: 'Marked as done!' });
     await bot.editMessageText(
-      '✅ _Done!_',
+      `✅ _Done!_${streakMsg}`,
       { chat_id: chatId, message_id: query.message.message_id, parse_mode: 'Markdown' }
     );
 
@@ -392,6 +401,16 @@ bot.on('message', async (msg) => {
       if (cmd === 'resume') { await handleResume(bot, msg); return; }
       if (cmd === 'undo') { await handleUndo(bot, msg); return; }
       if (cmd === 'summary') { await handleWeeklySummary(bot, msg); return; }
+      if (cmd === 'streaks') {
+        const streaks = await getAllStreaks(String(chatId));
+        if (streaks.length === 0) { bot.sendMessage(chatId, 'No active streaks yet. Complete recurring reminders to build streaks!'); return; }
+        let msg2 = '*Your Streaks*\n';
+        for (const s of streaks) {
+          msg2 += `\n*${s.reminder_text}*\nCurrent: ${s.current_streak} days | Best: ${s.longest_streak} days`;
+        }
+        bot.sendMessage(chatId, msg2, { parse_mode: 'Markdown' });
+        return;
+      }
       if (cmd === 'repeat') {
         const last = getLastCreated(String(chatId));
         if (!last) { bot.sendMessage(chatId, 'Nothing to repeat.'); return; }
@@ -503,6 +522,7 @@ bot.on('message', async (msg) => {
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
             notes: r.notes || null,
+            priority: r.priority || 'normal',
             mediaType: urlMatch ? 'link' : null,
             mediaId: urlMatch ? urlMatch[1] : null,
           };
@@ -541,6 +561,7 @@ async function saveAndConfirm(chatId, parsed, settings) {
     cronExpr: parsed.cronExpr,
     timezone: settings.timezone,
     category: parsed.category,
+    priority: parsed.priority,
   });
 
   // Save notes if present
@@ -568,12 +589,13 @@ async function saveAndConfirm(chatId, parsed, settings) {
   const relTime = relativeTime(parsed.remindAt);
   const recurLabel = parsed.cronExpr ? '\nRecurring' : '';
   const noteLabel = parsed.notes ? `\nNote: ${parsed.notes}` : '';
+  const priorityLabel = parsed.priority === 'urgent' ? '\nURGENT' : parsed.priority === 'low' ? '\nLow priority' : '';
   const hasPhoto = parsed.mediaType === 'reply' || pendingPhotos.has(String(chatId));
   const mediaLabel = hasPhoto ? '\nPhoto linked' : parsed.mediaType === 'link' ? `\n${parsed.mediaId}` : '';
 
   const sentMsg = await bot.sendMessage(
     chatId,
-    `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${noteLabel}${mediaLabel}`,
+    `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${priorityLabel}${noteLabel}${mediaLabel}`,
     { parse_mode: 'Markdown' }
   );
   if (sentMsg) messageReminderMap.set(sentMsg.message_id, id);

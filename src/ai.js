@@ -49,7 +49,8 @@ function buildPrompt(activeReminders) {
 Classify the message into one of these intents and return a JSON object:
 
 1. **"reminder"** — The user wants to set one or more reminders.
-   Return: { "intent": "reminder", "reminders": [{ "text": "...", "remindAt": "ISO8601", "cronExpr": "cron or null", "category": "health|work|personal|null", "notes": "extra info or null" }] }
+   Return: { "intent": "reminder", "reminders": [{ "text": "...", "remindAt": "ISO8601", "cronExpr": "cron or null", "category": "health|work|personal|null", "notes": "extra info or null", "priority": "low|normal|urgent" }] }
+   - Priority detection: "urgent", "important", "ASAP", "critical", "don't forget!", ALL CAPS emphasis, exclamation marks = "urgent". "low priority", "whenever", "not important" = "low". Default = "normal".
    - If the message contains MULTIPLE reminders, return multiple items in the array.
    - If a message has a main task AND extra context/details, create ONE reminder with the task as "text" and the extra info as "notes".
    - "notes" is for ANY supplementary information: amounts, details, what to bring, context, reasons, etc.
@@ -73,7 +74,7 @@ Classify the message into one of these intents and return a JSON object:
    - Use bold (*text*) for key info. Use line breaks between distinct points.
 
 3. **"command"** — The user wants a general bot action (NOT cancel/edit/reschedule — those are "action").
-   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|timezone|digest|help|menu", "args": "optional" }
+   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|timezone|digest|help|menu", "args": "optional" }
    - IMPORTANT: "cancel", "delete", "remove", "edit", "change", "move", "reschedule" referring to existing reminders should ALWAYS use intent "action", NOT "command".
 
 4. **"action"** — The user wants to cancel, edit, reschedule, or add notes to EXISTING reminders. Use this for ANY message about modifying, deleting, removing, or changing reminders.

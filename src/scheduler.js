@@ -9,6 +9,10 @@ import {
   getWeeklyStats,
   markReminderFired,
   getIgnoredReminders,
+  incrementFireCount,
+  getFireCount,
+  resetFireCount,
+  getReminder,
 } from './db.js';
 import { buildContextualMessage } from './context.js';
 
@@ -76,7 +80,7 @@ async function fireReminder(reminder) {
 
   // Context-aware message
   const settings = await getSettings(reminder.chat_id);
-  const message = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes);
+  const message = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
   const options = buildSnoozeKeyboard(reminder.id, reminder.snooze_count || 0);
 
   try {
@@ -102,6 +106,19 @@ async function fireReminder(reminder) {
       await markReminderFired(reminder.id);
     } catch (err2) {
       console.error(`Failed to send reminder ${reminder.id}:`, err2.message);
+    }
+  }
+
+  // Urgent reminders: re-fire every 5 min up to 3 times if no response
+  if (reminder.priority === 'urgent') {
+    await incrementFireCount(reminder.id);
+    const fireCount = await getFireCount(reminder.id);
+    if (fireCount < 3) {
+      const refireTimeout = setTimeout(async () => {
+        const fresh = await getReminder(reminder.id);
+        if (fresh && fresh.active === 1) fireReminder(fresh);
+      }, 5 * 60 * 1000);
+      activeJobs.set(`refire:${reminder.id}`, { timeout: refireTimeout });
     }
   }
 

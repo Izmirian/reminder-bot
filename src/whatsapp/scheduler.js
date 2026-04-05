@@ -11,6 +11,9 @@ import {
   getSettings,
   markReminderFired,
   getIgnoredReminders,
+  incrementFireCount,
+  getFireCount,
+  getReminder,
 } from '../db.js';
 import { buildContextualMessage } from '../context.js';
 
@@ -29,7 +32,7 @@ function getNextCronDate() {
 async function fireReminder(reminder) {
   try {
     const settings = await getSettings(reminder.chat_id);
-    const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes);
+    const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
 
     // Send image if attached — upload from stored binary, then send
     console.log(`[WA Fire] id=${reminder.id} media_type=${reminder.media_type} has_data=${!!reminder.media_data} data_len=${reminder.media_data?.length || 0}`);
@@ -56,6 +59,19 @@ async function fireReminder(reminder) {
     await markReminderFired(reminder.id);
   } catch (err) {
     console.error(`[WhatsApp] Failed to send reminder ${reminder.id}:`, err.message);
+  }
+
+  // Urgent reminders: re-fire every 5 min up to 3 times if no response
+  if (reminder.priority === 'urgent') {
+    await incrementFireCount(reminder.id);
+    const fireCount = await getFireCount(reminder.id);
+    if (fireCount < 3) {
+      const refireTimeout = setTimeout(async () => {
+        const fresh = await getReminder(reminder.id);
+        if (fresh && fresh.active === 1) fireReminder(fresh);
+      }, 5 * 60 * 1000);
+      activeJobs.set(`refire:${reminder.id}`, { timeout: refireTimeout });
+    }
   }
 
   if (!reminder.cron_expr) {

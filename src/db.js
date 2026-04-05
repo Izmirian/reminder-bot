@@ -63,9 +63,25 @@ async function initPostgres() {
     )
   `);
 
-  // Add media_data column if missing (migration)
+  // Streaks table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS streaks (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      reminder_text TEXT NOT NULL,
+      cron_expr TEXT,
+      current_streak INTEGER DEFAULT 0,
+      longest_streak INTEGER DEFAULT 0,
+      last_completed DATE,
+      UNIQUE(chat_id, reminder_text)
+    )
+  `);
+
+  // Migrations
   try {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
+    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal'`);
+    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS fire_count INTEGER DEFAULT 0`);
   } catch {}
 
   isPostgres = true;
@@ -165,11 +181,24 @@ async function insert(sql, params = []) {
 
 // --- Reminder CRUD ---
 
-export async function createReminder({ chatId, text, remindAt, cronExpr, timezone, category }) {
+export async function createReminder({ chatId, text, remindAt, cronExpr, timezone, category, priority }) {
   return insert(
-    'INSERT INTO reminders (chat_id, text, remind_at, cron_expr, timezone, category) VALUES (?, ?, ?, ?, ?, ?)',
-    [chatId, text, remindAt, cronExpr || null, timezone || 'UTC', category || null]
+    'INSERT INTO reminders (chat_id, text, remind_at, cron_expr, timezone, category, priority) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [chatId, text, remindAt, cronExpr || null, timezone || 'UTC', category || null, priority || 'normal']
   );
+}
+
+export async function incrementFireCount(id) {
+  await run('UPDATE reminders SET fire_count = fire_count + 1 WHERE id = ?', [id]);
+}
+
+export async function getFireCount(id) {
+  const row = await queryOne('SELECT fire_count FROM reminders WHERE id = ?', [id]);
+  return row?.fire_count || 0;
+}
+
+export async function resetFireCount(id) {
+  await run('UPDATE reminders SET fire_count = 0 WHERE id = ?', [id]);
 }
 
 export async function getReminder(id) {
@@ -378,4 +407,55 @@ export async function searchReminders(chatId, searchQuery, fromDate, toDate) {
   }
 
   return results;
+}
+
+// --- Streaks ---
+
+export async function updateStreak(chatId, reminderText, cronExpr) {
+  const today = new Date().toISOString().split('T')[0];
+  const existing = await queryOne(
+    'SELECT * FROM streaks WHERE chat_id = ? AND reminder_text = ?',
+    [chatId, reminderText]
+  );
+
+  if (existing) {
+    const lastDate = existing.last_completed;
+    const daysDiff = lastDate ? Math.floor((new Date(today) - new Date(lastDate)) / 86400000) : 999;
+
+    let newStreak;
+    if (daysDiff <= 1) {
+      // Consecutive day or same day — increment
+      newStreak = (existing.current_streak || 0) + (daysDiff === 0 ? 0 : 1);
+    } else {
+      // Streak broken — restart at 1
+      newStreak = 1;
+    }
+    const longest = Math.max(newStreak, existing.longest_streak || 0);
+    await run(
+      'UPDATE streaks SET current_streak = ?, longest_streak = ?, last_completed = ? WHERE id = ?',
+      [newStreak, longest, today, existing.id]
+    );
+    return newStreak;
+  } else {
+    await insert(
+      'INSERT INTO streaks (chat_id, reminder_text, cron_expr, current_streak, longest_streak, last_completed) VALUES (?, ?, ?, ?, ?, ?)',
+      [chatId, reminderText, cronExpr || null, 1, 1, today]
+    );
+    return 1;
+  }
+}
+
+export async function breakStreak(chatId, reminderText) {
+  await run(
+    'UPDATE streaks SET current_streak = 0 WHERE chat_id = ? AND reminder_text = ?',
+    [chatId, reminderText]
+  );
+}
+
+export async function getStreak(chatId, reminderText) {
+  return queryOne('SELECT * FROM streaks WHERE chat_id = ? AND reminder_text = ?', [chatId, reminderText]);
+}
+
+export async function getAllStreaks(chatId) {
+  return (await query('SELECT * FROM streaks WHERE chat_id = ? AND current_streak > 0 ORDER BY current_streak DESC', [chatId])).rows;
 }
