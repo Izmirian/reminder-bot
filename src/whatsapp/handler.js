@@ -15,7 +15,7 @@ import {
   createReminder, getActiveReminders, getReminder, deactivateReminder,
   deactivateAllReminders, deactivateTodaysReminders, pauseAllReminders,
   resumeAllReminders, getPausedReminders, getSettings, setTimezone,
-  setDailyDigest, setLocation, updateReminderText, updateReminderTime,
+  setDailyDigest, setLocation, setGoogleTokens, updateReminderText, updateReminderTime,
   getTodaysReminders, getLastDeactivated, reactivateReminder,
   getWeeklyStats, attachMedia, attachMediaWithData, getLastReminder, addNoteToReminder, searchReminders,
   updateStreak, getAllStreaks,
@@ -215,6 +215,16 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       if (cmd === 'location' && aiResult.args) {
         await setLocation(from, aiResult.args);
         return sendTextMessage(from, `Location set to *${aiResult.args}*\nWeather will show in your morning briefing.`);
+      }
+      if (cmd === 'connect_calendar') {
+        const { getAuthUrl, isConfigured } = await import('../google-calendar.js');
+        if (!isConfigured()) return sendTextMessage(from, 'Google Calendar not configured yet.');
+        const url = getAuthUrl(from);
+        return sendTextMessage(from, `Open this link to connect Google Calendar:\n${url}`);
+      }
+      if (cmd === 'disconnect_calendar') {
+        await setGoogleTokens(from, null);
+        return sendTextMessage(from, 'Google Calendar disconnected.');
       }
     }
 
@@ -767,5 +777,12 @@ async function createReminderAndSchedule(from, parsed, settings) {
   if (parsed.notes) await addNoteToReminder(id, parsed.notes);
   const reminder = await getReminder(id);
   scheduleReminder(reminder);
+
+  // Sync to Google Calendar if connected
+  try {
+    const { createEvent, isConfigured } = await import('../google-calendar.js');
+    if (isConfigured()) await createEvent(from, reminder);
+  } catch {}
+
   return id;
 }

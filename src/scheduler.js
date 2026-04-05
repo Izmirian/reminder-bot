@@ -385,6 +385,28 @@ export function setupDailyDigest() {
     }
   });
 
+  // Google Calendar sync — every 15 minutes
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { isConfigured, syncFromCalendar } = await import('./google-calendar.js');
+      if (!isConfigured()) return;
+      const { getUsersWithGoogleTokens } = await import('./db.js');
+      const users = await getUsersWithGoogleTokens();
+      for (const user of users) {
+        // Only Telegram users (non-phone-number chat IDs)
+        if (user.chat_id.length >= 10 && /^\d+$/.test(user.chat_id)) continue;
+        const created = await syncFromCalendar(user.chat_id, scheduleReminder);
+        if (created.length > 0 && botInstance) {
+          botInstance.sendMessage(user.chat_id,
+            `Synced ${created.length} event${created.length === 1 ? '' : 's'} from Calendar:\n${created.map(e => `- ${e}`).join('\n')}`,
+          ).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.error('[GCal Sync] Error:', err.message);
+    }
+  });
+
   // URL monitor check — every 30 minutes
   cron.schedule('*/30 * * * *', async () => {
     if (!botInstance) return;

@@ -102,6 +102,9 @@ async function initPostgres() {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS fire_count INTEGER DEFAULT 0`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS shared_with TEXT`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS created_by TEXT`);
+    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS google_event_id TEXT`);
+    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
+    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
   } catch {}
 
   isPostgres = true;
@@ -280,6 +283,24 @@ export async function getSettings(chatId) {
 export async function setTimezone(chatId, timezone) {
   await getSettings(chatId);
   await run('UPDATE settings SET timezone = ? WHERE chat_id = ?', [timezone, chatId]);
+}
+
+export async function setGoogleTokens(chatId, tokens) {
+  await getSettings(chatId);
+  await run('UPDATE settings SET google_tokens = ? WHERE chat_id = ?', [JSON.stringify(tokens), chatId]);
+}
+
+export async function getGoogleTokens(chatId) {
+  const settings = await getSettings(chatId);
+  return settings.google_tokens ? JSON.parse(settings.google_tokens) : null;
+}
+
+export async function setGoogleEventId(reminderId, eventId) {
+  await run('UPDATE reminders SET google_event_id = ? WHERE id = ?', [eventId, reminderId]);
+}
+
+export async function getUsersWithGoogleTokens() {
+  return (await query("SELECT * FROM settings WHERE google_tokens IS NOT NULL")).rows;
 }
 
 export async function setLocation(chatId, location) {

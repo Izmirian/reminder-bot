@@ -71,6 +71,35 @@ export function createWebhookServer() {
     }
   });
 
+  // --- Google Calendar OAuth routes ---
+  app.get('/auth/google', async (req, res) => {
+    try {
+      const { getAuthUrl } = await import('../google-calendar.js');
+      const chatId = req.query.chat_id;
+      if (!chatId) return res.status(400).send('Missing chat_id parameter');
+      const url = getAuthUrl(chatId);
+      if (!url) return res.status(500).send('Google Calendar not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.');
+      res.redirect(url);
+    } catch (err) {
+      console.error('[GCal Auth] Error:', err);
+      res.status(500).send('Failed to start Google Calendar auth');
+    }
+  });
+
+  app.get('/auth/google/callback', async (req, res) => {
+    try {
+      const { handleCallback } = await import('../google-calendar.js');
+      const code = req.query.code;
+      const chatId = req.query.state;
+      if (!code || !chatId) return res.status(400).send('Missing code or state');
+      await handleCallback(code, chatId);
+      res.send('<h2>Google Calendar connected!</h2><p>You can close this window and go back to the bot.</p>');
+    } catch (err) {
+      console.error('[GCal Callback] Error:', err);
+      res.status(500).send('Failed to connect Google Calendar. Try again.');
+    }
+  });
+
   // Health check
   app.get('/', (req, res) => {
     res.json({ status: 'ok', service: 'WhatsApp Reminder Bot' });

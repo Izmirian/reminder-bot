@@ -8,6 +8,7 @@ import {
   clearIgnoredSince, logCompletedReminder, resetFireCount,
   updateStreak, getAllStreaks, setLocation,
   createUrlMonitor, getUserMonitors, deactivateMonitor,
+  setGoogleTokens, getGoogleTokens,
 } from './db.js';
 import { parseReminderSmart, parseReminder, detectCategory } from './parser.js';
 import { classifyIntent } from './ai.js';
@@ -461,6 +462,18 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, `Location set to *${aiResult.args}*\nWeather will show in your morning briefing.`, { parse_mode: 'Markdown' });
         return;
       }
+      if (cmd === 'connect_calendar') {
+        const { getAuthUrl, isConfigured } = await import('./google-calendar.js');
+        if (!isConfigured()) { bot.sendMessage(chatId, 'Google Calendar not configured yet.'); return; }
+        const url = getAuthUrl(String(chatId));
+        bot.sendMessage(chatId, `Click here to connect Google Calendar:\n${url}`);
+        return;
+      }
+      if (cmd === 'disconnect_calendar') {
+        await setGoogleTokens(String(chatId), null);
+        bot.sendMessage(chatId, 'Google Calendar disconnected.');
+        return;
+      }
     }
 
     if (aiResult.intent === 'action') {
@@ -658,6 +671,12 @@ async function saveAndConfirm(chatId, parsed, settings) {
   // Re-fetch from DB so media_type, media_id, notes are all included
   const reminder = await getReminder(id);
   scheduleReminder(reminder);
+
+  // Sync to Google Calendar if connected
+  try {
+    const { createEvent, isConfigured } = await import('./google-calendar.js');
+    if (isConfigured()) await createEvent(String(chatId), reminder);
+  } catch {}
 
   const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
   const relTime = relativeTime(parsed.remindAt);
