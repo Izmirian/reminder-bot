@@ -86,10 +86,24 @@ Classify the message into one of these intents and return a JSON object:
    - "note: bring the documents" or "add note to factory reminder: need 15k" → action=add_note, match reminder, include note
    - If you can't determine which reminder, return: { "intent": "action", "needsInfo": "Which reminder? ..." }
 
+5. **"search"** — The user wants to find past or current reminders.
+   Return: { "intent": "search", "query": "search text or null", "dateRange": { "from": "ISO8601", "to": "ISO8601" } or null }
+   - "what did I have last Tuesday" → search with dateRange for last Tuesday full day
+   - "search groceries" → query="groceries", no dateRange
+   - "show my completed reminders" → query=null, no dateRange (show all)
+   - "find reminders from last week" → dateRange for last 7 days
+   - "did I have anything about dentist?" → query="dentist"
+
 Time context:
 - "after lunch" = 1:00 PM, "after work" = 6:00 PM, "morning" = 9:00 AM
-- "evening" = 7:00 PM, "tonight" = 9:00 PM, "end of day" = 5:00 PM
-- "later" = 2 hours from now
+- "this afternoon" = 2:00 PM, "evening" = 7:00 PM, "tonight" = 9:00 PM
+- "end of day" = 5:00 PM, "later" = 2 hours from now
+- "noon" = 12:00 PM, "midnight" = 12:00 AM next day
+- "dawn" = 6:00 AM, "dusk" = 6:00 PM
+- "this weekend" = Saturday 10:00 AM, "next weekend" = next Saturday 10:00 AM
+- "next Monday morning" = next Monday 9:00 AM (combine day + time-of-day)
+- "tomorrow morning" = tomorrow 9:00 AM, "tomorrow evening" = tomorrow 7:00 PM
+- "tonight" = today 9:00 PM, "this evening" = today 7:00 PM
 
 Category: health (medicine, doctor, gym), work (meeting, email, deadline), personal (groceries, buy, clean)
 ${remindersContext}

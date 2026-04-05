@@ -41,14 +41,14 @@ async function fireReminder(reminder) {
         if (freshMediaId) {
           apiResult = await sendImageMessage(reminder.chat_id, freshMediaId, contextMsg);
         } else {
-          apiResult = await sendReminderMessage(reminder.chat_id, contextMsg + '\n(photo could not be loaded)', reminder.id);
+          apiResult = await sendReminderMessage(reminder.chat_id, contextMsg + '\n(photo could not be loaded)', reminder.id, reminder.snooze_count || 0);
         }
       } catch (imgErr) {
         console.error(`[WhatsApp] Failed to send image for reminder ${reminder.id}:`, imgErr.message);
-        apiResult = await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
+        apiResult = await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id, reminder.snooze_count || 0);
       }
     } else {
-      apiResult = await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id);
+      apiResult = await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id, reminder.snooze_count || 0);
     }
     // Track message ID for reply-to feature
     const wamid = apiResult?.messages?.[0]?.id;

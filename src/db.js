@@ -345,3 +345,37 @@ export async function getCompletedReminders(chatId, daysBack = 28) {
     [chatId, daysBack]
   )).rows;
 }
+
+// Search reminders (active + completed) by text and/or date range
+export async function searchReminders(chatId, searchQuery, fromDate, toDate) {
+  const results = { active: [], completed: [] };
+
+  if (searchQuery) {
+    const pattern = `%${searchQuery}%`;
+    results.active = (await query(
+      'SELECT * FROM reminders WHERE chat_id = ? AND text ILIKE ? ORDER BY remind_at DESC LIMIT 20',
+      [chatId, pattern]
+    )).rows;
+    results.completed = (await query(
+      'SELECT * FROM completed_reminders WHERE chat_id = ? AND text ILIKE ? ORDER BY completed_at DESC LIMIT 20',
+      [chatId, pattern]
+    )).rows;
+  } else if (fromDate && toDate) {
+    results.active = (await query(
+      'SELECT * FROM reminders WHERE chat_id = ? AND remind_at >= ? AND remind_at <= ? ORDER BY remind_at DESC LIMIT 20',
+      [chatId, fromDate, toDate]
+    )).rows;
+    results.completed = (await query(
+      'SELECT * FROM completed_reminders WHERE chat_id = ? AND completed_at >= ?::timestamptz AND completed_at <= ?::timestamptz ORDER BY completed_at DESC LIMIT 20',
+      [chatId, fromDate, toDate]
+    )).rows;
+  } else {
+    // Show recent completed
+    results.completed = (await query(
+      "SELECT * FROM completed_reminders WHERE chat_id = ? ORDER BY completed_at DESC LIMIT 20",
+      [chatId]
+    )).rows;
+  }
+
+  return results;
+}

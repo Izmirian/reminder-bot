@@ -78,13 +78,20 @@ export async function sendButtonMessage(to, bodyText, buttons) {
 /**
  * Send a reminder with snooze buttons.
  * WhatsApp allows max 3 buttons per interactive message.
+ * After 3+ snoozes, show smart follow-up buttons.
  */
-export async function sendReminderMessage(to, reminderText, reminderId) {
-  const buttons = [
-    { id: `snooze:${reminderId}:15`, title: '15 min' },
-    { id: `snooze:${reminderId}:60`, title: '1 hour' },
-    { id: `done:${reminderId}`, title: 'Done' },
-  ];
+export async function sendReminderMessage(to, reminderText, reminderId, snoozeCount = 0) {
+  const buttons = snoozeCount >= 3
+    ? [
+        { id: `reschedule_tomorrow:${reminderId}`, title: 'Tomorrow 9am' },
+        { id: `drop:${reminderId}`, title: 'Drop it' },
+        { id: `done:${reminderId}`, title: 'Done' },
+      ]
+    : [
+        { id: `snooze:${reminderId}:15`, title: '15 min' },
+        { id: `snooze:${reminderId}:60`, title: '1 hour' },
+        { id: `done:${reminderId}`, title: 'Done' },
+      ];
 
   return sendButtonMessage(to, reminderText, buttons);
 }

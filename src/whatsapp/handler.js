@@ -17,7 +17,7 @@ import {
   resumeAllReminders, getPausedReminders, getSettings, setTimezone,
   setDailyDigest, updateReminderText, updateReminderTime,
   getTodaysReminders, getLastDeactivated, reactivateReminder,
-  getWeeklyStats, attachMedia, attachMediaWithData, getLastReminder, addNoteToReminder,
+  getWeeklyStats, attachMedia, attachMediaWithData, getLastReminder, addNoteToReminder, searchReminders,
   snoozeReminder as dbSnooze,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
@@ -249,6 +249,26 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       }
     }
 
+    if (aiResult.intent === 'search') {
+      const results = await searchReminders(
+        from, aiResult.query || null,
+        aiResult.dateRange?.from || null, aiResult.dateRange?.to || null
+      );
+      const all = [...results.active.map(r => ({ ...r, source: 'active' })), ...results.completed.map(r => ({ ...r, source: 'completed' }))];
+      if (all.length === 0) return sendTextMessage(from, 'No reminders found.');
+      let msg = `Found ${all.length} reminder${all.length === 1 ? '' : 's'}:\n`;
+      for (const r of all.slice(0, 15)) {
+        const date = r.remind_at || r.original_remind_at || r.completed_at;
+        const timeStr = date ? new Date(date).toLocaleString('en-US', {
+          timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit', hour12: true,
+        }) : '';
+        const status = r.source === 'completed' ? '✅' : (r.active === 1 ? '📌' : '⏸️');
+        msg += `\n${status} *${r.text}*\n  ${timeStr}`;
+      }
+      return sendTextMessage(from, msg);
+    }
+
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {
         pendingClarification.set(from, { originalText: text.trim() });
@@ -395,6 +415,37 @@ export async function handleButtonReply(from, buttonId) {
         `Want to make it recurring?\nSend: every ${p.dayName.toLowerCase()} at ${timeStr} ${p.text}`
       );
     }
+  }
+
+  // Smart follow-up: Reschedule to tomorrow 9am
+  if (buttonId.startsWith('reschedule_tomorrow:')) {
+    const reminderId = parseInt(buttonId.split(':')[1], 10);
+    const reminder = await getReminder(reminderId);
+    if (reminder) {
+      const settings = await getSettings(from);
+      const tomorrow9am = new Date();
+      tomorrow9am.setDate(tomorrow9am.getDate() + 1);
+      tomorrow9am.setHours(9, 0, 0, 0);
+
+      cancelReminder(reminderId);
+      await updateReminderTime(reminderId, tomorrow9am.toISOString());
+      await resetSnoozeCount(reminderId);
+      scheduleReminder({ ...reminder, remind_at: tomorrow9am.toISOString() });
+
+      const timeStr = formatTime(tomorrow9am.toISOString(), settings.timezone);
+      return sendTextMessage(from, `Rescheduled "${reminder.text}" to ${timeStr}`);
+    }
+  }
+
+  // Smart follow-up: Drop reminder
+  if (buttonId.startsWith('drop:')) {
+    const reminderId = parseInt(buttonId.split(':')[1], 10);
+    const reminder = await getReminder(reminderId);
+    cancelReminder(reminderId);
+    await deactivateReminder(reminderId);
+    await resetSnoozeCount(reminderId);
+    await clearIgnoredSince(reminderId);
+    return sendTextMessage(from, `Dropped "${reminder?.text || 'reminder'}"`);
   }
 }
 

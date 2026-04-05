@@ -3,7 +3,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import {
   createReminder, getSettings, getReminder, getActiveReminders,
   snoozeReminder as dbSnooze, deactivateReminder, addNoteToReminder,
-  attachMedia, getLastReminder,
+  attachMedia, getLastReminder, searchReminders,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder,
 } from './db.js';
@@ -135,6 +135,50 @@ bot.on('callback_query', async (query) => {
         { parse_mode: 'Markdown' }
       );
     }
+  }
+
+  // Smart follow-up: Reschedule to tomorrow 9am
+  if (data.startsWith('reschedule_tomorrow:')) {
+    const reminderId = parseInt(data.split(':')[1], 10);
+    const reminder = await getReminder(reminderId);
+    if (reminder) {
+      const settings = await getSettings(String(chatId));
+      const tomorrow9am = new Date();
+      tomorrow9am.setDate(tomorrow9am.getDate() + 1);
+      tomorrow9am.setHours(9, 0, 0, 0);
+
+      cancelReminder(reminderId);
+      const { updateReminderTime: updateTime } = await import('./db.js');
+      await updateTime(reminderId, tomorrow9am.toISOString());
+      await resetSnoozeCount(reminderId);
+      scheduleReminder({ ...reminder, remind_at: tomorrow9am.toISOString() });
+
+      const timeStr = tomorrow9am.toLocaleString('en-US', {
+        timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: true,
+      });
+      await bot.answerCallbackQuery(query.id, { text: 'Rescheduled!' });
+      await bot.editMessageText(
+        `Rescheduled "${reminder.text}" to ${timeStr}`,
+        { chat_id: chatId, message_id: query.message.message_id }
+      );
+    }
+  }
+
+  // Smart follow-up: Drop reminder
+  if (data.startsWith('drop:')) {
+    const reminderId = parseInt(data.split(':')[1], 10);
+    const reminder = await getReminder(reminderId);
+    cancelReminder(reminderId);
+    await deactivateReminder(reminderId);
+    await resetSnoozeCount(reminderId);
+    await clearIgnoredSince(reminderId);
+
+    await bot.answerCallbackQuery(query.id, { text: 'Dropped!' });
+    await bot.editMessageText(
+      `Dropped "${reminder?.text || 'reminder'}"`,
+      { chat_id: chatId, message_id: query.message.message_id }
+    );
   }
 });
 
@@ -416,6 +460,30 @@ bot.on('message', async (msg) => {
         }
         return;
       }
+    }
+
+    if (aiResult.intent === 'search') {
+      const results = await searchReminders(
+        String(chatId), aiResult.query || null,
+        aiResult.dateRange?.from || null, aiResult.dateRange?.to || null
+      );
+      const all = [...results.active.map(r => ({ ...r, source: 'active' })), ...results.completed.map(r => ({ ...r, source: 'completed' }))];
+      if (all.length === 0) {
+        bot.sendMessage(chatId, 'No reminders found.');
+        return;
+      }
+      let msg = `Found ${all.length} reminder${all.length === 1 ? '' : 's'}:\n`;
+      for (const r of all.slice(0, 15)) {
+        const date = r.remind_at || r.original_remind_at || r.completed_at;
+        const timeStr = date ? new Date(date).toLocaleString('en-US', {
+          timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit', hour12: true,
+        }) : '';
+        const status = r.source === 'completed' ? '✅' : (r.active === 1 ? '📌' : '⏸️');
+        msg += `\n${status} *${r.text}*\n  ${timeStr}`;
+      }
+      bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+      return;
     }
 
     if (aiResult.intent === 'reminder') {

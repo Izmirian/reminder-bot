@@ -33,7 +33,26 @@ function formatReminderMessage(reminder) {
   return `${emoji} *Reminder:* ${reminder.text}`;
 }
 
-function buildSnoozeKeyboard(reminderId) {
+function buildSnoozeKeyboard(reminderId, snoozeCount = 0) {
+  // After 3+ snoozes, offer smart options instead of normal snooze
+  if (snoozeCount >= 3) {
+    return {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: 'Tomorrow 9am', callback_data: `reschedule_tomorrow:${reminderId}` },
+            { text: 'Drop it', callback_data: `drop:${reminderId}` },
+          ],
+          [
+            { text: '1 hour', callback_data: `snooze:${reminderId}:60` },
+            { text: 'Done', callback_data: `done:${reminderId}` },
+          ],
+        ],
+      },
+      parse_mode: 'Markdown',
+    };
+  }
+
   return {
     reply_markup: {
       inline_keyboard: [
@@ -58,7 +77,7 @@ async function fireReminder(reminder) {
   // Context-aware message
   const settings = await getSettings(reminder.chat_id);
   const message = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes);
-  const options = buildSnoozeKeyboard(reminder.id);
+  const options = buildSnoozeKeyboard(reminder.id, reminder.snooze_count || 0);
 
   try {
     let sentMsg;
