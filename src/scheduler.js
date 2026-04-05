@@ -13,7 +13,25 @@ import {
   getFireCount,
   resetFireCount,
   getReminder,
+  getStreak,
 } from './db.js';
+
+// Fetch weather from wttr.in (free, no API key)
+async function fetchWeather(location) {
+  if (!location) return null;
+  try {
+    const res = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=j1`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const current = data.current_condition?.[0];
+    if (!current) return null;
+    return {
+      temp: current.temp_C,
+      desc: current.weatherDesc?.[0]?.value || '',
+      feelsLike: current.FeelsLikeC,
+    };
+  } catch { return null; }
+}
 import { buildContextualMessage } from './context.js';
 
 // Track active timers/cron jobs so we can cancel them
@@ -284,15 +302,35 @@ export function setupDailyDigest() {
       const todaysReminders = await getTodaysReminders(chatId, dateStr);
       if (todaysReminders.length === 0) continue;
 
-      let message = '📋 *Today\'s Reminders:*\n\n';
-      todaysReminders.forEach((r, i) => {
+      // Build morning briefing
+      let message = '*Good morning!*\n';
+
+      // Weather if location set
+      const weather = await fetchWeather(settings.location);
+      if (weather) {
+        message += `\n${weather.temp}°C, ${weather.desc}`;
+        if (weather.feelsLike !== weather.temp) message += ` (feels ${weather.feelsLike}°C)`;
+        message += '\n';
+      }
+
+      const letters = 'abcdefghijklmnopqrstuvwxyz';
+      message += `\nToday you have ${todaysReminders.length} reminder${todaysReminders.length === 1 ? '' : 's'}:\n`;
+      for (let i = 0; i < todaysReminders.length; i++) {
+        const r = todaysReminders[i];
         const time = new Date(r.remind_at).toLocaleTimeString('en-US', {
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: true,
+          timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true,
         });
-        message += `${i + 1}. ${time} — ${r.text}\n`;
-      });
+        const priorityTag = r.priority === 'urgent' ? ' *URGENT*' : '';
+        message += `\n  *${letters[i]})* ${time} — ${r.text}${priorityTag}`;
+        if (r.notes) message += `\n     Note: ${r.notes}`;
+        // Show streak if recurring
+        if (r.cron_expr) {
+          const streak = await getStreak(chatId, r.text);
+          if (streak?.current_streak > 1) message += `\n     Streak: ${streak.current_streak} days`;
+        }
+      }
+
+      message += '\n\nHave a good day!';
 
       try {
         await botInstance.sendMessage(chatId, message, { parse_mode: 'Markdown' });

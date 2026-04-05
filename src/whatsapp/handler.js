@@ -15,7 +15,7 @@ import {
   createReminder, getActiveReminders, getReminder, deactivateReminder,
   deactivateAllReminders, deactivateTodaysReminders, pauseAllReminders,
   resumeAllReminders, getPausedReminders, getSettings, setTimezone,
-  setDailyDigest, updateReminderText, updateReminderTime,
+  setDailyDigest, setLocation, updateReminderText, updateReminderTime,
   getTodaysReminders, getLastDeactivated, reactivateReminder,
   getWeeklyStats, attachMedia, attachMediaWithData, getLastReminder, addNoteToReminder, searchReminders,
   updateStreak, getAllStreaks,
@@ -211,6 +211,10 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
         return sendTextMessage(from, msg2);
       }
       if (cmd === 'repeat') return handleRepeat(from);
+      if (cmd === 'location' && aiResult.args) {
+        await setLocation(from, aiResult.args);
+        return sendTextMessage(from, `Location set to *${aiResult.args}*\nWeather will show in your morning briefing.`);
+      }
     }
 
     if (aiResult.intent === 'action') {

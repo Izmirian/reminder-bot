@@ -6,7 +6,7 @@ import {
   attachMedia, getLastReminder, searchReminders,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder, resetFireCount,
-  updateStreak, getAllStreaks,
+  updateStreak, getAllStreaks, setLocation,
 } from './db.js';
 import { parseReminderSmart, parseReminder, detectCategory } from './parser.js';
 import { classifyIntent } from './ai.js';
@@ -196,9 +196,21 @@ bot.on('callback_query', async (query) => {
 // Store pending photos waiting for a time
 const pendingPhotos = new Map();
 
+// Store pending forwarded messages waiting for a time
+const pendingForwards = new Map(); // chatId -> { text, msgId }
+
 // --- Natural language message handler ---
 
 bot.on('message', async (msg) => {
+  // Handle forwarded messages — create reminder from forwarded text
+  if ((msg.forward_from || msg.forward_date) && !msg.photo) {
+    const chatId = msg.chat.id;
+    const fwdText = msg.text || msg.caption || 'Forwarded message';
+    pendingForwards.set(String(chatId), { text: fwdText, msgId: msg.message_id });
+    bot.sendMessage(chatId, `Got it: "${fwdText.substring(0, 80)}${fwdText.length > 80 ? '...' : ''}"\n\nWhen should I remind you about this?`);
+    return;
+  }
+
   // Handle photos completely — don't fall through to text handler
   if (msg.photo && msg.photo.length > 0) {
     const chatId = msg.chat.id;
@@ -353,6 +365,30 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // Check for pending forwarded message awaiting a time
+  if (pendingForwards.has(String(chatId))) {
+    const fwd = pendingForwards.get(String(chatId));
+    pendingForwards.delete(String(chatId));
+    const settings = await getSettings(String(chatId));
+    const aiResult = await classifyIntent(`remind me ${text} to ${fwd.text}`, settings.timezone, new Date().toISOString(), []);
+    if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+      const r = aiResult.reminders[0];
+      await saveAndConfirm(chatId, {
+        text: fwd.text,
+        remindAt: new Date(r.remindAt),
+        cronExpr: null,
+        category: r.category || null,
+        notes: null,
+        mediaType: 'reply',
+        mediaId: String(fwd.msgId),
+      }, settings);
+    } else {
+      bot.sendMessage(chatId, "Couldn't understand the time. Try: \"in 30 minutes\" or \"at 3pm\"");
+      pendingForwards.set(String(chatId), fwd);
+    }
+    return;
+  }
+
   // Check for pending "YES" confirmation for clear all
   if (pendingClearAll.has(String(chatId))) {
     pendingClearAll.delete(String(chatId));
@@ -419,6 +455,11 @@ bot.on('message', async (msg) => {
       }
       if (cmd === 'timezone' && aiResult.args) { await handleTimezone(bot, msg, [null, aiResult.args]); return; }
       if (cmd === 'digest' && aiResult.args) { await handleDigest(bot, msg, [null, aiResult.args]); return; }
+      if (cmd === 'location' && aiResult.args) {
+        await setLocation(String(chatId), aiResult.args);
+        bot.sendMessage(chatId, `Location set to *${aiResult.args}*\nWeather will show in your morning briefing.`, { parse_mode: 'Markdown' });
+        return;
+      }
     }
 
     if (aiResult.intent === 'action') {

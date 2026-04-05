@@ -46,9 +46,11 @@ async function initPostgres() {
       chat_id TEXT PRIMARY KEY,
       timezone TEXT DEFAULT 'UTC',
       daily_digest INTEGER DEFAULT 0,
-      digest_time TEXT DEFAULT '08:00'
+      digest_time TEXT DEFAULT '08:00',
+      location TEXT
     )
   `);
+  try { await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS location TEXT`); } catch {}
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS completed_reminders (
@@ -260,6 +262,11 @@ export async function getSettings(chatId) {
 export async function setTimezone(chatId, timezone) {
   await getSettings(chatId);
   await run('UPDATE settings SET timezone = ? WHERE chat_id = ?', [timezone, chatId]);
+}
+
+export async function setLocation(chatId, location) {
+  await getSettings(chatId);
+  await run('UPDATE settings SET location = ? WHERE chat_id = ?', [location, chatId]);
 }
 
 export async function setDailyDigest(chatId, enabled, time) {

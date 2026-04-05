@@ -74,7 +74,8 @@ Classify the message into one of these intents and return a JSON object:
    - Use bold (*text*) for key info. Use line breaks between distinct points.
 
 3. **"command"** — The user wants a general bot action (NOT cancel/edit/reschedule — those are "action").
-   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|timezone|digest|help|menu", "args": "optional" }
+   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|timezone|digest|location|help|menu", "args": "optional" }
+   - "set location Amman" or "my city is Dubai" → command=location, args="Amman" or "Dubai"
    - IMPORTANT: "cancel", "delete", "remove", "edit", "change", "move", "reschedule" referring to existing reminders should ALWAYS use intent "action", NOT "command".
 
 4. **"action"** — The user wants to cancel, edit, reschedule, or add notes to EXISTING reminders. Use this for ANY message about modifying, deleting, removing, or changing reminders.
