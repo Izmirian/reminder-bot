@@ -346,10 +346,10 @@ bot.on('message', async (msg) => {
   // Check for pending photo awaiting a time
   if (pendingPhotos.has(String(chatId))) {
     const photo = pendingPhotos.get(String(chatId));
-    pendingPhotos.delete(String(chatId));
     const settings = await getSettings(String(chatId));
     const aiResult = await classifyIntent(`remind me ${text} to ${photo.text}`, settings.timezone, new Date().toISOString(), []);
     if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+      pendingPhotos.delete(String(chatId));
       const r = aiResult.reminders[0];
       await saveAndConfirm(chatId, {
         text: photo.text,
@@ -360,6 +360,9 @@ bot.on('message', async (msg) => {
         mediaType: 'reply',
         mediaId: String(photo.msgId),
       }, settings);
+    } else if (aiResult?.needsInfo) {
+      // Keep photo pending, ask for more details
+      bot.sendMessage(chatId, aiResult.needsInfo);
     } else {
       bot.sendMessage(chatId, "Couldn't understand the time. Try: \"in 30 minutes\" or \"at 3pm\"");
       pendingPhotos.set(String(chatId), photo);
@@ -370,10 +373,10 @@ bot.on('message', async (msg) => {
   // Check for pending forwarded message awaiting a time
   if (pendingForwards.has(String(chatId))) {
     const fwd = pendingForwards.get(String(chatId));
-    pendingForwards.delete(String(chatId));
     const settings = await getSettings(String(chatId));
     const aiResult = await classifyIntent(`remind me ${text} to ${fwd.text}`, settings.timezone, new Date().toISOString(), []);
     if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+      pendingForwards.delete(String(chatId));
       const r = aiResult.reminders[0];
       await saveAndConfirm(chatId, {
         text: fwd.text,
@@ -384,6 +387,8 @@ bot.on('message', async (msg) => {
         mediaType: 'reply',
         mediaId: String(fwd.msgId),
       }, settings);
+    } else if (aiResult?.needsInfo) {
+      bot.sendMessage(chatId, aiResult.needsInfo);
     } else {
       bot.sendMessage(chatId, "Couldn't understand the time. Try: \"in 30 minutes\" or \"at 3pm\"");
       pendingForwards.set(String(chatId), fwd);

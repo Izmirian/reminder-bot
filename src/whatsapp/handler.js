@@ -138,10 +138,10 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
   // Pending photo awaiting a time
   if (pendingPhotos.has(from)) {
     const photo = pendingPhotos.get(from);
-    pendingPhotos.delete(from);
     const settings = await getSettings(from);
     const aiResult = await classifyIntent(`remind me ${text.trim()} to ${photo.text}`, settings.timezone, new Date().toISOString(), []);
     if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+      pendingPhotos.delete(from);
       const r = aiResult.reminders[0];
       const id = await createReminderAndSchedule(from, {
         text: photo.text, remindAt: new Date(r.remindAt), cronExpr: null, category: null, notes: null,
@@ -151,6 +151,12 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       const relTime = relativeTime(new Date(r.remindAt));
       return sendTextMessage(from, `✅ *${photo.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
     }
+    if (aiResult?.needsInfo) {
+      // Keep photo pending, ask for more details
+      return sendTextMessage(from, aiResult.needsInfo);
+    }
+    // Only clear pending photo on unrecoverable failure
+    pendingPhotos.delete(from);
     return sendTextMessage(from, "Couldn't understand the time. Try: \"in 30 minutes\" or \"at 3pm\"");
   }
 
