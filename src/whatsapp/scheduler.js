@@ -188,6 +188,22 @@ async function fetchWeather(location) {
 }
 
 export function setupWhatsAppDigest() {
+  // Catch missed reminders every 2 minutes — fires any past-due reminders that were never sent
+  cron.schedule('*/2 * * * *', async () => {
+    try {
+      const { getMissedReminders } = await import('../db.js');
+      const missed = await getMissedReminders();
+      // Only fire WhatsApp reminders (phone number chat IDs)
+      const waMissed = missed.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id));
+      for (const reminder of waMissed) {
+        console.log(`[WA Missed Check] Firing missed reminder ${reminder.id}: "${reminder.text}"`);
+        fireReminder(reminder);
+      }
+    } catch (err) {
+      console.error('[WA Missed Check] Error:', err.message);
+    }
+  });
+
   cron.schedule('* * * * *', async () => {
     const now = new Date();
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;

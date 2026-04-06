@@ -269,6 +269,23 @@ export async function loadAllReminders() {
  * Schedule daily digest cron jobs for all users who have it enabled.
  */
 export function setupDailyDigest() {
+  // Catch missed reminders every 2 minutes — fires any past-due reminders that were never sent
+  cron.schedule('*/2 * * * *', async () => {
+    if (!botInstance) return;
+    try {
+      const { getMissedReminders } = await import('./db.js');
+      const missed = await getMissedReminders();
+      // Only fire Telegram reminders (non-phone-number chat IDs)
+      const telegramMissed = missed.filter(r => !(r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)));
+      for (const reminder of telegramMissed) {
+        console.log(`[Missed Check] Firing missed reminder ${reminder.id}: "${reminder.text}"`);
+        fireReminder(reminder);
+      }
+    } catch (err) {
+      console.error('[Missed Check] Error:', err.message);
+    }
+  });
+
   // Check for ignored reminders every 6 hours
   cron.schedule('0 */6 * * *', async () => {
     if (!botInstance) return;

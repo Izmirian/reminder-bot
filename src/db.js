@@ -322,6 +322,13 @@ export async function deactivateTodaysReminders(chatId, dateStr) {
   return result.changes;
 }
 
+// Find active one-off reminders that are past due and were never fired
+export async function getMissedReminders() {
+  return (await query(
+    "SELECT * FROM reminders WHERE active = 1 AND cron_expr IS NULL AND remind_at < NOW() AND last_fired_at IS NULL"
+  )).rows;
+}
+
 export async function deactivateAllReminders(chatId) {
   const result = await run('UPDATE reminders SET active = 0 WHERE chat_id = ? AND active = 1', [chatId]);
   return result.changes;
