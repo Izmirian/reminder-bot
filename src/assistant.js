@@ -188,7 +188,7 @@ export async function handleExpenseIntent(chatId, aiResult) {
   const { action, amount, description, category, period } = aiResult;
 
   if (action === 'add' && amount) {
-    await addExpense(chatId, amount, description, category);
+    await addExpense(chatId, Number(amount), description, category);
     const catLabel = category ? ` (${category})` : '';
     return `Logged *${amount}*${catLabel}${description ? ` — ${description}` : ''}`;
   }
@@ -233,8 +233,8 @@ export function handleTimerIntent(chatId, aiResult, sendFn) {
     if (existing?.timeout) clearTimeout(existing.timeout);
 
     const endsAt = new Date(Date.now() + mins * 60 * 1000);
-    const timeout = setTimeout(() => {
-      sendFn(`*${timerLabel}* is up! (${mins} min)`);
+    const timeout = setTimeout(async () => {
+      try { await sendFn(`*${timerLabel}* is up! (${mins} min)`); } catch (e) { console.error('[Timer] send failed:', e.message); }
       activeTimers.delete(chatId);
     }, mins * 60 * 1000);
 

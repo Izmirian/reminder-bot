@@ -188,6 +188,28 @@ async function fetchWeather(location) {
 }
 
 export function setupWhatsAppDigest() {
+  // Birthday check for WhatsApp users daily at 8am
+  cron.schedule('0 8 * * *', async () => {
+    try {
+      const { getUpcomingBirthdays } = await import('../db.js');
+      const allReminders = await getAllActiveReminders();
+      const waChatIds = [...new Set(allReminders.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      const today = new Date();
+      for (const chatId of waChatIds) {
+        const contacts = await getUpcomingBirthdays(chatId);
+        for (const c of contacts) {
+          if (!c.birthday) continue;
+          const [m, d] = c.birthday.split('-').map(Number);
+          const bdayDate = new Date(today.getFullYear(), m - 1, d);
+          if (bdayDate < today) bdayDate.setFullYear(today.getFullYear() + 1);
+          const daysUntil = Math.ceil((bdayDate - today) / 86400000);
+          if (daysUntil === 0) sendTextMessage(chatId, `🎂 *${c.name}'s birthday is today!*`).catch(() => {});
+          else if (daysUntil === 3) sendTextMessage(chatId, `🎂 *${c.name}'s birthday is in 3 days* (${c.birthday})`).catch(() => {});
+        }
+      }
+    } catch (err) { console.error('[WA Birthday Check]', err.message); }
+  });
+
   // Catch missed reminders every 2 minutes — fires any past-due reminders that were never sent
   cron.schedule('*/2 * * * *', async () => {
     try {
@@ -246,6 +268,32 @@ export function setupWhatsAppDigest() {
           if (streak?.current_streak > 1) message += `\n     Streak: ${streak.current_streak} days`;
         }
       }
+      // Yesterday's spending
+      try {
+        const { getExpenseSummary } = await import('../db.js');
+        const yesterday = await getExpenseSummary(chatId, 1);
+        if (yesterday.count > 0) message += `\n\nLast 24h spending: *${yesterday.total.toFixed(2)}* (${yesterday.count} transactions)`;
+      } catch {}
+
+      // Upcoming birthdays
+      try {
+        const { getUpcomingBirthdays } = await import('../db.js');
+        const contacts = await getUpcomingBirthdays(chatId);
+        const today2 = new Date();
+        const upcoming = contacts.filter(c => {
+          if (!c.birthday) return false;
+          const [m, d] = c.birthday.split('-').map(Number);
+          const bd = new Date(today2.getFullYear(), m - 1, d);
+          if (bd < today2) bd.setFullYear(today2.getFullYear() + 1);
+          const diff = Math.ceil((bd - today2) / 86400000);
+          return diff >= 0 && diff <= 7;
+        });
+        if (upcoming.length > 0) {
+          message += '\n\nUpcoming birthdays:';
+          for (const c of upcoming) message += `\n  🎂 ${c.name} (${c.birthday})`;
+        }
+      } catch {}
+
       message += '\n\nHave a good day!';
 
       try {

@@ -280,6 +280,16 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
         }
         return;
       }
+      if (aiResult.action === 'add_note') {
+        for (const id of ids) {
+          const r = activeRems.find(rem => rem.id === id);
+          if (r && aiResult.note) {
+            await addNoteToReminder(id, aiResult.note);
+            await sendTextMessage(from, `Note added to "${r.text}": ${aiResult.note}`);
+          }
+        }
+        return;
+      }
     }
 
     if (aiResult.intent === 'monitor') {

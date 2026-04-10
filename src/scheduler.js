@@ -275,9 +275,9 @@ export function setupDailyDigest() {
     try {
       const { getUpcomingBirthdays } = await import('./db.js');
       const allReminders = await getAllActiveReminders();
+      // Check all users (Telegram only — non-phone-number IDs)
       const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
       const today = new Date();
-      const todayMD = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
       for (const chatId of chatIds) {
         const contacts = await getUpcomingBirthdays(chatId);
@@ -286,6 +286,7 @@ export function setupDailyDigest() {
           // Check if birthday is today or in 3 days
           const bday = c.birthday; // format: MM-DD
           const bdayDate = new Date(today.getFullYear(), parseInt(bday.split('-')[0]) - 1, parseInt(bday.split('-')[1]));
+          if (bdayDate < today) bdayDate.setFullYear(today.getFullYear() + 1);
           const daysUntil = Math.ceil((bdayDate - today) / 86400000);
           if (daysUntil === 0) {
             botInstance.sendMessage(chatId, `🎂 *${c.name}'s birthday is today!*`).catch(() => {});
@@ -390,8 +391,8 @@ export function setupDailyDigest() {
       // Yesterday's spending
       try {
         const { getExpenseSummary } = await import('./db.js');
-        const yesterday = await getExpenseSummary(chatId, 1);
-        if (yesterday.count > 0) message += `\n\nYesterday's spending: *${yesterday.total.toFixed(2)}* (${yesterday.count} transactions)`;
+        const recent = await getExpenseSummary(chatId, 1);
+        if (recent.count > 0) message += `\n\nLast 24h spending: *${recent.total.toFixed(2)}* (${recent.count} transactions)`;
       } catch {}
 
       // Upcoming birthdays
@@ -403,6 +404,7 @@ export function setupDailyDigest() {
           if (!c.birthday) return false;
           const [m, d] = c.birthday.split('-').map(Number);
           const bd = new Date(today.getFullYear(), m - 1, d);
+          if (bd < today) bd.setFullYear(today.getFullYear() + 1);
           const diff = Math.ceil((bd - today) / 86400000);
           return diff >= 0 && diff <= 7;
         });
