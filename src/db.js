@@ -153,6 +153,19 @@ async function initPostgres() {
     )
   `);
 
+  // Documents storage
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS documents (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      filename TEXT,
+      description TEXT,
+      media_type TEXT,
+      media_data BYTEA,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   // Migrations
   try {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
@@ -598,6 +611,26 @@ export async function updateMonitorPrice(id, price) {
 
 export async function deactivateMonitor(id) {
   await run('UPDATE url_monitors SET active = 0 WHERE id = ?', [id]);
+}
+
+// --- Documents ---
+
+export async function saveDocument(chatId, filename, description, mediaType, mediaData) {
+  return insert('INSERT INTO documents (chat_id, filename, description, media_type, media_data) VALUES (?, ?, ?, ?, ?)',
+    [chatId, filename, description || null, mediaType || null, mediaData || null]);
+}
+
+export async function getDocuments(chatId) {
+  return (await query('SELECT id, chat_id, filename, description, media_type, created_at FROM documents WHERE chat_id = ? ORDER BY created_at DESC LIMIT 20', [chatId])).rows;
+}
+
+export async function getDocument(chatId, id) {
+  return queryOne('SELECT * FROM documents WHERE chat_id = ? AND id = ?', [chatId, id]);
+}
+
+export async function searchDocuments(chatId, searchQuery) {
+  return (await query('SELECT id, filename, description, media_type, created_at FROM documents WHERE chat_id = ? AND (filename ILIKE ? OR description ILIKE ?) ORDER BY created_at DESC LIMIT 10',
+    [chatId, `%${searchQuery}%`, `%${searchQuery}%`])).rows;
 }
 
 // --- Lists ---
