@@ -4,10 +4,11 @@
  */
 import {
   getList, getAllLists, upsertListItems, deleteList,
-  upsertContact, getContact, getAllContacts,
+  upsertContact, getContact, getAllContacts, getUpcomingBirthdays,
   addJournalEntry, getJournalEntries, searchJournal,
   addMemory, getMemories, searchMemory, deleteMemory,
   addExpense, getExpenses, getExpenseSummary,
+  getActiveReminders, getAllStreaks, getUserMonitors, getSettings,
 } from './db.js';
 
 // Active timers per chat
@@ -258,6 +259,116 @@ export function handleTimerIntent(chatId, aiResult, sendFn) {
   }
 
   return 'Not sure what to do with that timer command.';
+}
+
+/**
+ * Build a full dashboard overview of everything.
+ */
+export async function buildDashboard(chatId, timezone) {
+  let msg = '*Dashboard*\n';
+
+  // Reminders
+  try {
+    const reminders = await getActiveReminders(chatId);
+    const today = new Date().toISOString().split('T')[0];
+    const todayRems = reminders.filter(r => r.remind_at?.startsWith(today));
+    const urgent = reminders.filter(r => r.priority === 'urgent');
+    msg += `\n*Reminders:* ${reminders.length} active`;
+    if (todayRems.length > 0) msg += ` (${todayRems.length} today)`;
+    if (urgent.length > 0) msg += ` | ${urgent.length} urgent`;
+    if (reminders.length > 0) {
+      const next = reminders[0];
+      const time = new Date(next.remind_at).toLocaleString('en-US', {
+        timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: true,
+        weekday: 'short', month: 'short', day: 'numeric',
+      });
+      msg += `\nNext: *${next.text}* — ${time}`;
+    }
+  } catch {}
+
+  // Lists
+  try {
+    const lists = await getAllLists(chatId);
+    if (lists.length > 0) {
+      msg += '\n';
+      for (const l of lists) {
+        const items = typeof l.items === 'string' ? JSON.parse(l.items) : l.items;
+        msg += `\n*${l.list_name}:* ${items.length} items`;
+        if (items.length > 0 && items.length <= 5) msg += ` — ${items.join(', ')}`;
+        else if (items.length > 5) msg += ` — ${items.slice(0, 3).join(', ')}...`;
+      }
+    }
+  } catch {}
+
+  // Expenses
+  try {
+    const week = await getExpenseSummary(chatId, 7);
+    const today = await getExpenseSummary(chatId, 1);
+    if (week.count > 0) {
+      msg += `\n\n*Spending:* ${week.total.toFixed(2)} this week (${week.count} transactions)`;
+      if (today.count > 0) msg += `\nToday: ${today.total.toFixed(2)}`;
+    }
+  } catch {}
+
+  // Streaks
+  try {
+    const streaks = await getAllStreaks(chatId);
+    if (streaks.length > 0) {
+      msg += '\n\n*Streaks:*';
+      for (const s of streaks.slice(0, 5)) {
+        msg += `\n${s.reminder_text}: ${s.current_streak} days`;
+      }
+    }
+  } catch {}
+
+  // Upcoming birthdays
+  try {
+    const contacts = await getUpcomingBirthdays(chatId);
+    const now = new Date();
+    const upcoming = contacts.filter(c => {
+      if (!c.birthday) return false;
+      const [m, d] = c.birthday.split('-').map(Number);
+      const bd = new Date(now.getFullYear(), m - 1, d);
+      if (bd < now) bd.setFullYear(now.getFullYear() + 1);
+      const diff = Math.ceil((bd - now) / 86400000);
+      return diff >= 0 && diff <= 14;
+    });
+    if (upcoming.length > 0) {
+      msg += '\n\n*Birthdays:*';
+      for (const c of upcoming) msg += `\n🎂 ${c.name} (${c.birthday})`;
+    }
+  } catch {}
+
+  // URL Monitors
+  try {
+    const monitors = await getUserMonitors(chatId);
+    if (monitors.length > 0) msg += `\n\n*Monitors:* ${monitors.length} active`;
+  } catch {}
+
+  // Memory count
+  try {
+    const memories = await getMemories(chatId);
+    if (memories.length > 0) msg += `\n\n*Memory:* ${memories.length} facts saved`;
+  } catch {}
+
+  // Timer
+  const timer = activeTimers.get(chatId);
+  if (timer) {
+    const remaining = Math.max(0, Math.ceil((timer.endsAt - Date.now()) / 60000));
+    msg += `\n\n*Timer:* ${timer.label} — ${remaining} min remaining`;
+  }
+
+  // Settings summary
+  try {
+    const settings = await getSettings(chatId);
+    msg += '\n\n*Settings:*';
+    msg += `\nTimezone: ${settings.timezone}`;
+    if (settings.location) msg += ` | Location: ${settings.location}`;
+    msg += `\nDigest: ${settings.daily_digest ? `ON at ${settings.digest_time}` : 'OFF'}`;
+    msg += `\nCalendar: ${settings.google_tokens ? 'Connected' : 'Not connected'}`;
+  } catch {}
+
+  return msg;
 }
 
 /**

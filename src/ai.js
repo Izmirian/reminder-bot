@@ -81,7 +81,8 @@ Classify the message into one of these intents and return a JSON object:
    - **Multi-language**: If the user writes in Arabic, respond in Arabic. Match their language naturally.
 
 3. **"command"** — The user wants a general bot action (NOT cancel/edit/reschedule — those are "action").
-   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|timezone|digest|location|connect_calendar|disconnect_calendar|help|menu", "args": "optional" }
+   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|dashboard|timezone|digest|location|connect_calendar|disconnect_calendar|help|menu", "args": "optional" }
+   - "dashboard", "overview", "show me everything", "status", "my day" → command=dashboard
    - "set location Amman" or "my city is Dubai" → command=location, args="Amman" or "Dubai"
    - "connect google calendar" or "sync my calendar" → command=connect_calendar
    - "disconnect calendar" → command=disconnect_calendar

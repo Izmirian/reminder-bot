@@ -34,6 +34,7 @@ import { getConversationalResponse } from './conversation.js';
 import {
   handleListIntent, handleContactIntent, handleJournalIntent,
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
+  buildDashboard,
 } from './assistant.js';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -448,6 +449,11 @@ bot.on('message', async (msg) => {
       if (cmd === 'resume') { await handleResume(bot, msg); return; }
       if (cmd === 'undo') { await handleUndo(bot, msg); return; }
       if (cmd === 'summary') { await handleWeeklySummary(bot, msg); return; }
+      if (cmd === 'dashboard') {
+        const dash = await buildDashboard(String(chatId), settings.timezone);
+        bot.sendMessage(chatId, dash, { parse_mode: 'Markdown' });
+        return;
+      }
       if (cmd === 'streaks') {
         const streaks = await getAllStreaks(String(chatId));
         if (streaks.length === 0) { bot.sendMessage(chatId, 'No active streaks yet. Complete recurring reminders to build streaks!'); return; }

@@ -34,6 +34,7 @@ import { getConversationalResponse } from '../conversation.js';
 import {
   handleListIntent, handleContactIntent, handleJournalIntent,
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
+  buildDashboard,
 } from '../assistant.js';
 
 // Track state
@@ -214,6 +215,10 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       if (cmd === 'resume') return handleResume(from);
       if (cmd === 'undo') return handleUndo(from);
       if (cmd === 'summary') return handleWeekly(from);
+      if (cmd === 'dashboard') {
+        const settings2 = await getSettings(from);
+        return sendTextMessage(from, await buildDashboard(from, settings2.timezone));
+      }
       if (cmd === 'streaks') {
         const streaks = await getAllStreaks(from);
         if (streaks.length === 0) return sendTextMessage(from, 'No active streaks yet. Complete recurring reminders to build streaks!');
