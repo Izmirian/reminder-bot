@@ -661,7 +661,12 @@ export async function deleteList(chatId, listName) {
 export async function upsertContact(chatId, name, notes, birthday) {
   const existing = await queryOne('SELECT * FROM contacts WHERE chat_id = ? AND LOWER(name) = LOWER(?)', [chatId, name]);
   if (existing) {
-    if (notes) await run('UPDATE contacts SET notes = ? WHERE id = ?', [notes, existing.id]);
+    if (notes) {
+      // Append notes instead of overwriting
+      const current = existing.notes || '';
+      const updated = current ? `${current}\n${notes}` : notes;
+      await run('UPDATE contacts SET notes = ? WHERE id = ?', [updated, existing.id]);
+    }
     if (birthday) await run('UPDATE contacts SET birthday = ? WHERE id = ?', [birthday, existing.id]);
     return existing.id;
   }

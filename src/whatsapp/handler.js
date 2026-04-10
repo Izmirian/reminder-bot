@@ -804,6 +804,7 @@ async function createReminderAndSchedule(from, parsed, settings) {
   const id = await createReminder({
     chatId: from, text: parsed.text, remindAt: parsed.remindAt.toISOString(),
     cronExpr: parsed.cronExpr, timezone: settings.timezone, category: parsed.category,
+    priority: parsed.priority, sharedWith: parsed.sharedWith, createdBy: from,
   });
   if (parsed.notes) await addNoteToReminder(id, parsed.notes);
   const reminder = await getReminder(id);

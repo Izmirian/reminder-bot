@@ -139,6 +139,7 @@ Classify the message into one of these intents and return a JSON object:
    Return: { "intent": "memory", "action": "save|recall|list|forget", "fact": "text", "query": "search text or null", "id": number or null }
    - "remember that my car is a BMW X5" → action=save, fact="car is a BMW X5"
    - "remember I'm allergic to shellfish" → action=save, fact="allergic to shellfish"
+   - IMPORTANT: "remember TO [do something]" with a time = REMINDER intent, not memory. "remember to call John at 3pm" → reminder. "remember my car is BMW" (no time, stating a fact) → memory.
    - "what car do I have?" → action=recall, query="car"
    - "what do you know about me?" → action=list
    - "forget that" or "forget #3" → action=forget, id=3
