@@ -402,12 +402,15 @@ async function saveAndConfirm(from, parsed, settings) {
     priority: parsed.priority, sharedWith: parsed.sharedWith, createdBy: from,
   });
 
-  scheduleReminder({
-    id, chat_id: from, text: parsed.text,
-    remind_at: parsed.remindAt.toISOString(), cron_expr: parsed.cronExpr,
-    category: parsed.category, priority: parsed.priority,
-    shared_with: parsed.sharedWith ? JSON.stringify(parsed.sharedWith) : null,
-  });
+  // Only schedule if the reminder is in the future
+  if (parsed.remindAt.getTime() > Date.now()) {
+    scheduleReminder({
+      id, chat_id: from, text: parsed.text,
+      remind_at: parsed.remindAt.toISOString(), cron_expr: parsed.cronExpr,
+      category: parsed.category, priority: parsed.priority,
+      shared_with: parsed.sharedWith ? JSON.stringify(parsed.sharedWith) : null,
+    });
+  }
 
   const timeStr = formatTime(parsed.remindAt.toISOString(), settings.timezone);
   const relTime = relativeTime(parsed.remindAt);
@@ -782,7 +785,9 @@ async function createReminderAndSchedule(from, parsed, settings) {
   });
   if (parsed.notes) await addNoteToReminder(id, parsed.notes);
   const reminder = await getReminder(id);
-  scheduleReminder(reminder);
+  if (new Date(reminder.remind_at).getTime() > Date.now()) {
+    scheduleReminder(reminder);
+  }
 
   // Sync to Google Calendar if connected
   try {

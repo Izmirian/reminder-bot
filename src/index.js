@@ -675,7 +675,10 @@ async function saveAndConfirm(chatId, parsed, settings) {
 
   // Re-fetch from DB so media_type, media_id, notes are all included
   const reminder = await getReminder(id);
-  scheduleReminder(reminder);
+  // Only schedule if in the future (prevent accidental immediate fire)
+  if (new Date(reminder.remind_at).getTime() > Date.now()) {
+    scheduleReminder(reminder);
+  }
 
   // Sync to Google Calendar if connected
   try {
