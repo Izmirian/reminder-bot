@@ -31,6 +31,10 @@ import {
 } from './scheduler.js';
 import { detectRecurringPattern } from '../patterns.js';
 import { getConversationalResponse } from '../conversation.js';
+import {
+  handleListIntent, handleContactIntent, handleJournalIntent,
+  handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
+} from '../assistant.js';
 
 // Track state
 const pendingClearAll = new Set();
@@ -320,6 +324,14 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       }
       return sendTextMessage(from, msg);
     }
+
+    if (aiResult.intent === 'list') return sendTextMessage(from, await handleListIntent(from, aiResult));
+    if (aiResult.intent === 'contact') return sendTextMessage(from, await handleContactIntent(from, aiResult));
+    if (aiResult.intent === 'journal') return sendTextMessage(from, await handleJournalIntent(from, aiResult, settings.timezone));
+    if (aiResult.intent === 'memory') return sendTextMessage(from, await handleMemoryIntent(from, aiResult));
+    if (aiResult.intent === 'expense') return sendTextMessage(from, await handleExpenseIntent(from, aiResult));
+    if (aiResult.intent === 'timer') return sendTextMessage(from, handleTimerIntent(from, aiResult, (msg) => sendTextMessage(from, msg)));
+    if (aiResult.intent === 'summarize') return sendTextMessage(from, await handleSummarizeIntent(aiResult.url));
 
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {

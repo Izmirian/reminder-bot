@@ -31,6 +31,10 @@ import {
   pendingClearAll, relativeTime, formatTime,
 } from './commands.js';
 import { getConversationalResponse } from './conversation.js';
+import {
+  handleListIntent, handleContactIntent, handleJournalIntent,
+  handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
+} from './assistant.js';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) {
@@ -593,6 +597,14 @@ bot.on('message', async (msg) => {
       bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
       return;
     }
+
+    if (aiResult.intent === 'list') { bot.sendMessage(chatId, await handleListIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'contact') { bot.sendMessage(chatId, await handleContactIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'journal') { bot.sendMessage(chatId, await handleJournalIntent(String(chatId), aiResult, settings.timezone), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'memory') { bot.sendMessage(chatId, await handleMemoryIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'expense') { bot.sendMessage(chatId, await handleExpenseIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'timer') { bot.sendMessage(chatId, handleTimerIntent(String(chatId), aiResult, (msg) => bot.sendMessage(chatId, msg)), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'summarize') { bot.sendMessage(chatId, await handleSummarizeIntent(aiResult.url)); return; }
 
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {

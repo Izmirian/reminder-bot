@@ -95,6 +95,64 @@ async function initPostgres() {
     )
   `);
 
+  // Lists table (grocery, shopping, todo, etc.)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lists (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      list_name TEXT NOT NULL,
+      items JSONB DEFAULT '[]',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Contacts/people notes
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contacts (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      notes TEXT,
+      birthday TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Journal entries
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS journal (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      entry TEXT NOT NULL,
+      mood TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Conversation memory (things the user told the bot to remember)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS memory (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      fact TEXT NOT NULL,
+      category TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Expenses
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS expenses (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      description TEXT,
+      category TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
   // Migrations
   try {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
@@ -540,4 +598,114 @@ export async function updateMonitorPrice(id, price) {
 
 export async function deactivateMonitor(id) {
   await run('UPDATE url_monitors SET active = 0 WHERE id = ?', [id]);
+}
+
+// --- Lists ---
+
+export async function getList(chatId, listName) {
+  return queryOne('SELECT * FROM lists WHERE chat_id = ? AND LOWER(list_name) = LOWER(?)', [chatId, listName]);
+}
+
+export async function getAllLists(chatId) {
+  return (await query('SELECT * FROM lists WHERE chat_id = ? ORDER BY updated_at DESC', [chatId])).rows;
+}
+
+export async function upsertListItems(chatId, listName, items) {
+  const existing = await getList(chatId, listName);
+  if (existing) {
+    await run('UPDATE lists SET items = ?, updated_at = NOW() WHERE id = ?', [JSON.stringify(items), existing.id]);
+    return existing.id;
+  }
+  return insert('INSERT INTO lists (chat_id, list_name, items) VALUES (?, ?, ?)', [chatId, listName, JSON.stringify(items)]);
+}
+
+export async function deleteList(chatId, listName) {
+  await run('DELETE FROM lists WHERE chat_id = ? AND LOWER(list_name) = LOWER(?)', [chatId, listName]);
+}
+
+// --- Contacts ---
+
+export async function upsertContact(chatId, name, notes, birthday) {
+  const existing = await queryOne('SELECT * FROM contacts WHERE chat_id = ? AND LOWER(name) = LOWER(?)', [chatId, name]);
+  if (existing) {
+    if (notes) await run('UPDATE contacts SET notes = ? WHERE id = ?', [notes, existing.id]);
+    if (birthday) await run('UPDATE contacts SET birthday = ? WHERE id = ?', [birthday, existing.id]);
+    return existing.id;
+  }
+  return insert('INSERT INTO contacts (chat_id, name, notes, birthday) VALUES (?, ?, ?, ?)', [chatId, name, notes || null, birthday || null]);
+}
+
+export async function getContact(chatId, name) {
+  return queryOne('SELECT * FROM contacts WHERE chat_id = ? AND LOWER(name) = LOWER(?)', [chatId, name]);
+}
+
+export async function getAllContacts(chatId) {
+  return (await query('SELECT * FROM contacts WHERE chat_id = ? ORDER BY name ASC', [chatId])).rows;
+}
+
+export async function getUpcomingBirthdays(chatId, daysAhead = 7) {
+  // Get contacts with birthdays in the next N days
+  return (await query(
+    `SELECT * FROM contacts WHERE chat_id = ? AND birthday IS NOT NULL ORDER BY birthday ASC`,
+    [chatId]
+  )).rows;
+}
+
+// --- Journal ---
+
+export async function addJournalEntry(chatId, entry, mood) {
+  return insert('INSERT INTO journal (chat_id, entry, mood) VALUES (?, ?, ?)', [chatId, entry, mood || null]);
+}
+
+export async function getJournalEntries(chatId, fromDate, toDate) {
+  if (fromDate && toDate) {
+    return (await query(
+      'SELECT * FROM journal WHERE chat_id = ? AND created_at >= ?::timestamptz AND created_at <= ?::timestamptz ORDER BY created_at DESC LIMIT 20',
+      [chatId, fromDate, toDate]
+    )).rows;
+  }
+  return (await query('SELECT * FROM journal WHERE chat_id = ? ORDER BY created_at DESC LIMIT 20', [chatId])).rows;
+}
+
+export async function searchJournal(chatId, searchQuery) {
+  return (await query('SELECT * FROM journal WHERE chat_id = ? AND entry ILIKE ? ORDER BY created_at DESC LIMIT 20', [chatId, `%${searchQuery}%`])).rows;
+}
+
+// --- Memory (conversation facts) ---
+
+export async function addMemory(chatId, fact, category) {
+  return insert('INSERT INTO memory (chat_id, fact, category) VALUES (?, ?, ?)', [chatId, fact, category || null]);
+}
+
+export async function getMemories(chatId) {
+  return (await query('SELECT * FROM memory WHERE chat_id = ? ORDER BY created_at DESC', [chatId])).rows;
+}
+
+export async function searchMemory(chatId, searchQuery) {
+  return (await query('SELECT * FROM memory WHERE chat_id = ? AND fact ILIKE ? ORDER BY created_at DESC LIMIT 10', [chatId, `%${searchQuery}%`])).rows;
+}
+
+export async function deleteMemory(chatId, id) {
+  await run('DELETE FROM memory WHERE chat_id = ? AND id = ?', [chatId, id]);
+}
+
+// --- Expenses ---
+
+export async function addExpense(chatId, amount, description, category) {
+  return insert('INSERT INTO expenses (chat_id, amount, description, category) VALUES (?, ?, ?, ?)', [chatId, amount, description || null, category || null]);
+}
+
+export async function getExpenses(chatId, daysBack = 7) {
+  return (await query(
+    "SELECT * FROM expenses WHERE chat_id = ? AND created_at > NOW() - INTERVAL '1 day' * ? ORDER BY created_at DESC",
+    [chatId, daysBack]
+  )).rows;
+}
+
+export async function getExpenseSummary(chatId, daysBack = 7) {
+  const row = await queryOne(
+    "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE chat_id = ? AND created_at > NOW() - INTERVAL '1 day' * ?",
+    [chatId, daysBack]
+  );
+  return { total: Number(row?.total || 0), count: Number(row?.count || 0) };
 }
