@@ -191,22 +191,11 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 /**
  * Classify user intent with context about their active reminders.
  */
-// Conversation history per chat (last 5 exchanges)
-const chatHistory = new Map(); // chatId -> [{ role, content }]
+import { addChatMessage, getChatHistory as dbGetChatHistory } from './db.js';
 
-function addToHistory(chatId, role, content) {
-  if (!chatHistory.has(chatId)) chatHistory.set(chatId, []);
-  const history = chatHistory.get(chatId);
-  history.push({ role, content: content.substring(0, 500) }); // Truncate long messages
-  // Keep last 10 messages (5 exchanges)
-  while (history.length > 10) history.shift();
+export async function addToHistory(chatId, role, content) {
+  try { await addChatMessage(chatId, role, content); } catch {}
 }
-
-export function getChatHistory(chatId) {
-  return chatHistory.get(chatId) || [];
-}
-
-export { addToHistory };
 
 export async function classifyIntent(userMessage, timezone, currentTime, activeReminders, chatId) {
   const api = await ensureClient();
@@ -230,8 +219,8 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
   }
 
   try {
-    // Build messages with conversation history for context
-    const history = chatId ? getChatHistory(chatId) : [];
+    // Build messages with conversation history for context (last 20 messages from DB)
+    const history = chatId ? await dbGetChatHistory(chatId, 20) : [];
     const messages = [
       ...history,
       {
@@ -254,12 +243,11 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
     text = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
     const result = JSON.parse(text);
 
-    // Store in history for context
+    // Store in history for context (persisted to DB)
     if (chatId) {
-      addToHistory(chatId, 'user', userMessage);
-      // Store assistant response summary for context
-      const summary = result.intent === 'chat' ? result.reply : `[${result.intent}]`;
-      addToHistory(chatId, 'assistant', summary);
+      await addToHistory(chatId, 'user', userMessage);
+      const summary = result.intent === 'chat' ? result.reply : `[${result.intent}: ${JSON.stringify(result).substring(0, 300)}]`;
+      await addToHistory(chatId, 'assistant', summary);
     }
 
     return result;

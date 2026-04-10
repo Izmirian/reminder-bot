@@ -166,6 +166,19 @@ async function initPostgres() {
     )
   `);
 
+  // Chat history for conversation context
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_history (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  // Index for fast lookups
+  try { await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id ON chat_history(chat_id, created_at DESC)`); } catch {}
+
   // Migrations
   try {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
@@ -631,6 +644,27 @@ export async function getDocument(chatId, id) {
 export async function searchDocuments(chatId, searchQuery) {
   return (await query('SELECT id, filename, description, media_type, created_at FROM documents WHERE chat_id = ? AND (filename ILIKE ? OR description ILIKE ?) ORDER BY created_at DESC LIMIT 10',
     [chatId, `%${searchQuery}%`, `%${searchQuery}%`])).rows;
+}
+
+// --- Chat History ---
+
+export async function addChatMessage(chatId, role, content) {
+  await insert('INSERT INTO chat_history (chat_id, role, content) VALUES (?, ?, ?)',
+    [chatId, role, content.substring(0, 1000)]); // Cap at 1000 chars per message
+  // Prune old messages — keep last 40 per chat (20 exchanges)
+  await run(
+    `DELETE FROM chat_history WHERE chat_id = ? AND id NOT IN (SELECT id FROM chat_history WHERE chat_id = ? ORDER BY created_at DESC LIMIT 40)`,
+    [chatId, chatId]
+  );
+}
+
+export async function getChatHistory(chatId, limit = 20) {
+  // Get last N messages (limit = 20 = 10 exchanges)
+  const rows = (await query(
+    'SELECT role, content FROM chat_history WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?',
+    [chatId, limit]
+  )).rows;
+  return rows.reverse(); // Oldest first for conversation order
 }
 
 // --- Lists ---
