@@ -3,7 +3,7 @@
  * Meta sends incoming messages here via POST, and verifies via GET.
  */
 import express from 'express';
-import { handleTextMessage, handleButtonReply, handleImageMessage } from './handler.js';
+import { handleTextMessage, handleButtonReply, handleImageMessage, handleDocumentMessage } from './handler.js';
 import { markAsRead } from './api.js';
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'selfreminder_webhook_2024';
@@ -60,6 +60,14 @@ export function createWebhookServer() {
               const mimeType = msg.image?.mime_type || 'image/jpeg';
               if (imageId) {
                 await handleImageMessage(from, imageId, caption, mimeType);
+              }
+            } else if (msg.type === 'document') {
+              const docId = msg.document?.id;
+              const caption = msg.document?.caption || '';
+              const mimeType = msg.document?.mime_type || 'application/pdf';
+              const filename = msg.document?.filename || 'document';
+              if (docId) {
+                await handleDocumentMessage(from, docId, caption, mimeType, filename);
               }
             } else if (msg.type === 'interactive') {
               const buttonId = msg.interactive?.button_reply?.id;

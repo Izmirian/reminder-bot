@@ -218,6 +218,43 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // Handle documents (PDFs, files)
+  if (msg.document) {
+    const chatId = msg.chat.id;
+    const caption = msg.caption || '';
+    const fileName = msg.document.file_name || 'document';
+    const mimeType = msg.document.mime_type || '';
+
+    try {
+      bot.sendChatAction(chatId, 'typing').catch(() => {});
+      const file = await bot.getFile(msg.document.file_id);
+      const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
+      const res = await fetch(fileUrl);
+      const buffer = Buffer.from(await res.arrayBuffer());
+
+      if (mimeType.includes('pdf')) {
+        bot.sendMessage(chatId, `Analyzing *${fileName}*...`, { parse_mode: 'Markdown' });
+        const { analyzePdfBuffer } = await import('./analyze.js');
+        const result = await analyzePdfBuffer(buffer, caption || null);
+        const { saveDocument } = await import('./db.js');
+        await saveDocument(String(chatId), fileName, result.substring(0, 200), mimeType, buffer);
+        bot.sendMessage(chatId, result);
+      } else if (mimeType.includes('image')) {
+        const { analyzeImage } = await import('./analyze.js');
+        const result = await analyzeImage(buffer, mimeType, caption || null);
+        bot.sendMessage(chatId, result);
+      } else {
+        const { saveDocument } = await import('./db.js');
+        await saveDocument(String(chatId), fileName, caption || 'Saved document', mimeType, buffer);
+        bot.sendMessage(chatId, `Saved *${fileName}*. Say "show my documents" to see saved files.`, { parse_mode: 'Markdown' });
+      }
+    } catch (err) {
+      console.error('[TG Document error]', err);
+      bot.sendMessage(chatId, "Something went wrong processing the document.");
+    }
+    return;
+  }
+
   // Handle photos completely — don't fall through to text handler
   if (msg.photo && msg.photo.length > 0) {
     const chatId = msg.chat.id;
@@ -225,6 +262,21 @@ bot.on('message', async (msg) => {
     const caption = msg.caption || '';
 
     try {
+      // Check if user wants analysis
+      const analyzeKeywords = /analyz|summariz|read this|what is this|what does|extract|report|review|explain|translate|describe|tell me about|check this|look at/i;
+      if (caption && analyzeKeywords.test(caption)) {
+        bot.sendChatAction(chatId, 'typing').catch(() => {});
+        const photoId = msg.photo[msg.photo.length - 1].file_id; // Largest photo
+        const file = await bot.getFile(photoId);
+        const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
+        const res = await fetch(fileUrl);
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const { analyzeImage } = await import('./analyze.js');
+        const result = await analyzeImage(buffer, 'image/jpeg', caption);
+        bot.sendMessage(chatId, result);
+        return;
+      }
+
       if (caption) {
         // Photo with caption — try to create a reminder
         const settings = await getSettings(String(chatId));
@@ -348,9 +400,27 @@ bot.on('message', async (msg) => {
     }
   }
 
-  // Check for pending photo awaiting a time
+  // Check for pending photo awaiting a time or action
   if (pendingPhotos.has(String(chatId))) {
     const photo = pendingPhotos.get(String(chatId));
+
+    // Check if user wants to analyze the pending photo
+    if (/^(analyz|read|summariz|explain|describe|what|report|extract|check|review|translate)/i.test(lower)) {
+      pendingPhotos.delete(String(chatId));
+      bot.sendChatAction(chatId, 'typing').catch(() => {});
+      // Download the photo for analysis
+      try {
+        const photoFile = await bot.getFile(String(photo.msgId));
+        // msgId is message_id, not file_id — need to get from original message
+        // For Telegram, we stored msgId not file_id, so we can't download here
+        // Just inform user to resend with caption
+        bot.sendMessage(chatId, "To analyze a photo, send it with a caption like \"analyze this\" or \"read this document\".");
+      } catch {
+        bot.sendMessage(chatId, "To analyze a photo, resend it with a caption like \"analyze this\".");
+      }
+      return;
+    }
+
     const settings = await getSettings(String(chatId));
     const aiResult = await classifyIntent(`remind me ${text} to ${photo.text}`, settings.timezone, new Date().toISOString(), []);
     if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {

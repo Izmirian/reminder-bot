@@ -140,9 +140,26 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
     return sendTextMessage(from, 'Clear all cancelled.');
   }
 
-  // Pending photo awaiting a time
+  // Pending photo awaiting a time or action
   if (pendingPhotos.has(from)) {
     const photo = pendingPhotos.get(from);
+
+    // Check if user wants to analyze the pending photo
+    if (/^(analyz|read|summariz|explain|describe|what|report|extract|check|review|translate)/i.test(lower) && photo.buffer) {
+      pendingPhotos.delete(from);
+      const { analyzeImage } = await import('../analyze.js');
+      const result = await analyzeImage(photo.buffer, photo.mimeType || 'image/jpeg', text.trim());
+      return sendTextMessage(from, result);
+    }
+
+    // Check if user wants to save the photo as a document
+    if (/^save/i.test(lower) && photo.buffer) {
+      pendingPhotos.delete(from);
+      const { saveDocument } = await import('../db.js');
+      await saveDocument(from, 'photo', text.trim().replace(/^save\s*/i, '') || 'Saved photo', photo.mimeType, photo.buffer);
+      return sendTextMessage(from, 'Photo saved. Say "show my documents" to see saved files.');
+    }
+
     const settings = await getSettings(from);
     const aiResult = await classifyIntent(`remind me ${text.trim()} to ${photo.text}`, settings.timezone, new Date().toISOString(), []);
     if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
@@ -762,6 +779,21 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
       imageBuffer = await downloadMedia(mediaUrl);
     }
 
+    // Check if user wants to analyze/read the image
+    const analyzeKeywords = /analyz|summariz|read this|what is this|what does|extract|report|review|explain|translate|describe|tell me about|check this|look at/i;
+    if (caption && analyzeKeywords.test(caption) && imageBuffer) {
+      const { analyzeImage } = await import('../analyze.js');
+      const result = await analyzeImage(imageBuffer, mimeType, caption);
+      return sendTextMessage(from, result);
+    }
+
+    // No caption — analyze the image by default (if not in pending photo flow)
+    if (!caption && imageBuffer && !pendingPhotos.has(from)) {
+      // Ask what they want to do with it
+      pendingPhotos.set(from, { buffer: imageBuffer, mimeType, text: 'Photo' });
+      return sendTextMessage(from, 'Got the photo! What would you like me to do?\n\n• Set a reminder — tell me when\n• Analyze it — say "analyze" or "read this"\n• Just save it — say "save"');
+    }
+
     if (caption) {
       const activeRems = await getActiveReminders(from);
       const aiResult = await classifyIntent(caption, settings.timezone, new Date().toISOString(), activeRems);
@@ -801,6 +833,47 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
   } catch (err) {
     console.error('[WA Image error]', err);
     return sendTextMessage(from, 'Got the photo! When should I remind you about it?');
+  }
+}
+
+// --- Document handler ---
+
+export async function handleDocumentMessage(from, waMediaId, caption, mimeType, filename) {
+  try {
+    // Download the document
+    const mediaUrl = await getMediaUrl(waMediaId);
+    if (!mediaUrl) return sendTextMessage(from, "Couldn't download the document.");
+    const docBuffer = await downloadMedia(mediaUrl);
+    if (!docBuffer) return sendTextMessage(from, "Couldn't download the document.");
+
+    const isPdf = mimeType.includes('pdf');
+    const isImage = mimeType.includes('image');
+
+    // Auto-analyze the document
+    if (isPdf) {
+      await sendTextMessage(from, `Analyzing *${filename}*...`);
+      const { analyzePdfBuffer } = await import('../analyze.js');
+      const result = await analyzePdfBuffer(docBuffer, caption || null);
+      // Save to documents table
+      const { saveDocument } = await import('../db.js');
+      await saveDocument(from, filename, result.substring(0, 200), mimeType, docBuffer);
+      return sendTextMessage(from, result);
+    }
+
+    if (isImage) {
+      await sendTextMessage(from, `Analyzing *${filename}*...`);
+      const { analyzeImage } = await import('../analyze.js');
+      const result = await analyzeImage(docBuffer, mimeType, caption || null);
+      return sendTextMessage(from, result);
+    }
+
+    // Other file types — just save
+    const { saveDocument } = await import('../db.js');
+    await saveDocument(from, filename, caption || 'Saved document', mimeType, docBuffer);
+    return sendTextMessage(from, `Saved *${filename}*. Say "show my documents" to see saved files.`);
+  } catch (err) {
+    console.error('[WA Document error]', err);
+    return sendTextMessage(from, "Something went wrong processing the document.");
   }
 }
 
