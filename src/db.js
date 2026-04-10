@@ -650,16 +650,16 @@ export async function searchDocuments(chatId, searchQuery) {
 
 export async function addChatMessage(chatId, role, content) {
   await insert('INSERT INTO chat_history (chat_id, role, content) VALUES (?, ?, ?)',
-    [chatId, role, content.substring(0, 1000)]); // Cap at 1000 chars per message
-  // Prune old messages — keep last 40 per chat (20 exchanges)
+    [chatId, role, content.substring(0, 2000)]); // Cap at 2000 chars per message
+  // Prune old messages — keep last 200 per chat (100 exchanges)
   await run(
-    `DELETE FROM chat_history WHERE chat_id = ? AND id NOT IN (SELECT id FROM chat_history WHERE chat_id = ? ORDER BY created_at DESC LIMIT 40)`,
+    `DELETE FROM chat_history WHERE chat_id = ? AND id NOT IN (SELECT id FROM chat_history WHERE chat_id = ? ORDER BY created_at DESC LIMIT 200)`,
     [chatId, chatId]
   );
 }
 
-export async function getChatHistory(chatId, limit = 20) {
-  // Get last N messages (limit = 20 = 10 exchanges)
+export async function getChatHistory(chatId, limit = 50) {
+  // Get last N messages (limit = 50 = 25 exchanges)
   const rows = (await query(
     'SELECT role, content FROM chat_history WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?',
     [chatId, limit]

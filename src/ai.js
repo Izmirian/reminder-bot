@@ -220,7 +220,7 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
 
   try {
     // Build messages with conversation history for context (last 20 messages from DB)
-    const history = chatId ? await dbGetChatHistory(chatId, 20) : [];
+    const history = chatId ? await dbGetChatHistory(chatId, 50) : [];
     const messages = [
       ...history,
       {
@@ -231,7 +231,7 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
 
     const response = await api.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
+      max_tokens: 800,
       temperature: 0.3,
       system: buildPrompt(activeReminders),
       messages,
@@ -246,7 +246,16 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
     // Store in history for context (persisted to DB)
     if (chatId) {
       await addToHistory(chatId, 'user', userMessage);
-      const summary = result.intent === 'chat' ? result.reply : `[${result.intent}: ${JSON.stringify(result).substring(0, 300)}]`;
+      // Store rich context so follow-up questions work well
+      let summary;
+      if (result.intent === 'chat') summary = result.reply;
+      else if (result.intent === 'reminder') summary = `Set reminder: ${result.reminders?.map(r => r.text).join(', ')}`;
+      else if (result.intent === 'list') summary = `List action: ${result.action} on ${result.listName} — ${result.items?.join(', ') || ''}`;
+      else if (result.intent === 'expense') summary = result.amount ? `Logged expense: ${result.amount} — ${result.description}` : `Expense ${result.action}`;
+      else if (result.intent === 'memory') summary = result.fact ? `Remembered: ${result.fact}` : `Memory ${result.action}: ${result.query || ''}`;
+      else if (result.intent === 'contact') summary = `Contact: ${result.action} ${result.name || ''} ${result.notes || ''} ${result.birthday || ''}`;
+      else if (result.intent === 'summarize') summary = `Summarizing URL: ${result.url}`;
+      else summary = JSON.stringify(result).substring(0, 500);
       await addToHistory(chatId, 'assistant', summary);
     }
 
