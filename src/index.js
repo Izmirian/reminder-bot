@@ -430,7 +430,7 @@ bot.on('message', async (msg) => {
   bot.sendChatAction(chatId, 'typing').catch(() => {});
   const settings = await getSettings(String(chatId));
   const activeReminders = await getActiveReminders(String(chatId));
-  const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString(), activeReminders);
+  const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString(), activeReminders, String(chatId));
 
   if (aiResult) {
     if (aiResult.intent === 'chat') {
@@ -611,7 +611,7 @@ bot.on('message', async (msg) => {
     if (aiResult.intent === 'memory') { bot.sendMessage(chatId, await handleMemoryIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
     if (aiResult.intent === 'expense') { bot.sendMessage(chatId, await handleExpenseIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
     if (aiResult.intent === 'timer') { bot.sendMessage(chatId, handleTimerIntent(String(chatId), aiResult, (msg) => bot.sendMessage(chatId, msg)), { parse_mode: 'Markdown' }); return; }
-    if (aiResult.intent === 'summarize') { bot.sendMessage(chatId, await handleSummarizeIntent(aiResult.url)); return; }
+    if (aiResult.intent === 'summarize') { bot.sendMessage(chatId, await handleSummarizeIntent(aiResult.url, String(chatId))); return; }
 
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {

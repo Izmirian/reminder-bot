@@ -191,7 +191,24 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 /**
  * Classify user intent with context about their active reminders.
  */
-export async function classifyIntent(userMessage, timezone, currentTime, activeReminders) {
+// Conversation history per chat (last 5 exchanges)
+const chatHistory = new Map(); // chatId -> [{ role, content }]
+
+function addToHistory(chatId, role, content) {
+  if (!chatHistory.has(chatId)) chatHistory.set(chatId, []);
+  const history = chatHistory.get(chatId);
+  history.push({ role, content: content.substring(0, 500) }); // Truncate long messages
+  // Keep last 10 messages (5 exchanges)
+  while (history.length > 10) history.shift();
+}
+
+export function getChatHistory(chatId) {
+  return chatHistory.get(chatId) || [];
+}
+
+export { addToHistory };
+
+export async function classifyIntent(userMessage, timezone, currentTime, activeReminders, chatId) {
   const api = await ensureClient();
   if (!api) return null;
 
@@ -213,22 +230,39 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
   }
 
   try {
+    // Build messages with conversation history for context
+    const history = chatId ? getChatHistory(chatId) : [];
+    const messages = [
+      ...history,
+      {
+        role: 'user',
+        content: `Current local time: ${localTimeStr}\nTimezone: ${timezone}\nUser message: "${userMessage}"`,
+      },
+    ];
+
     const response = await api.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 500,
       temperature: 0.3,
       system: buildPrompt(activeReminders),
-      messages: [{
-        role: 'user',
-        content: `Current local time: ${localTimeStr}\nTimezone: ${timezone}\nUser message: "${userMessage}"`,
-      }],
+      messages,
     });
 
     let text = response.content[0]?.text;
     if (!text) return null;
 
     text = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-    return JSON.parse(text);
+    const result = JSON.parse(text);
+
+    // Store in history for context
+    if (chatId) {
+      addToHistory(chatId, 'user', userMessage);
+      // Store assistant response summary for context
+      const summary = result.intent === 'chat' ? result.reply : `[${result.intent}]`;
+      addToHistory(chatId, 'assistant', summary);
+    }
+
+    return result;
   } catch (err) {
     console.error('[AI] Intent classification failed:', err.message);
     aiAvailable = false;

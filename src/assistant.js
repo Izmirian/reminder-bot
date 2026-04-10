@@ -374,7 +374,7 @@ export async function buildDashboard(chatId, timezone) {
 /**
  * Handle a "summarize" intent — fetch URL and summarize.
  */
-export async function handleSummarizeIntent(url) {
+export async function handleSummarizeIntent(url, chatId) {
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ReminderBot/1.0)' },
@@ -399,7 +399,13 @@ export async function handleSummarizeIntent(url) {
       max_tokens: 300,
       messages: [{ role: 'user', content: `Summarize this in 3-5 bullet points, concise:\n\n${text}` }],
     });
-    return response.content[0]?.text || 'Could not generate summary.';
+    const summary = response.content[0]?.text || 'Could not generate summary.';
+    // Store in chat history so follow-up questions have context
+    if (chatId) {
+      const { addToHistory } = await import('./ai.js');
+      addToHistory(chatId, 'assistant', `[Summary of ${url}]: ${summary.substring(0, 400)}`);
+    }
+    return summary;
   } catch (err) {
     return `Failed to summarize: ${err.message}`;
   }

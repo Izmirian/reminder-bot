@@ -196,7 +196,7 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
   // --- AI-first intent classification ---
   const settings = await getSettings(from);
   const activeRems = await getActiveReminders(from);
-  const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString(), activeRems);
+  const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString(), activeRems, from);
 
   if (aiResult) {
     if (aiResult.intent === 'chat') {
@@ -346,7 +346,7 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
     if (aiResult.intent === 'memory') return sendTextMessage(from, await handleMemoryIntent(from, aiResult));
     if (aiResult.intent === 'expense') return sendTextMessage(from, await handleExpenseIntent(from, aiResult));
     if (aiResult.intent === 'timer') return sendTextMessage(from, handleTimerIntent(from, aiResult, (msg) => sendTextMessage(from, msg)));
-    if (aiResult.intent === 'summarize') return sendTextMessage(from, await handleSummarizeIntent(aiResult.url));
+    if (aiResult.intent === 'summarize') return sendTextMessage(from, await handleSummarizeIntent(aiResult.url, from));
 
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {
