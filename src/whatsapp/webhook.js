@@ -4,6 +4,7 @@
  */
 import express from 'express';
 import { handleTextMessage, handleButtonReply, handleImageMessage } from './handler.js';
+import { markAsRead } from './api.js';
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'selfreminder_webhook_2024';
 
@@ -47,6 +48,9 @@ export function createWebhookServer() {
             const from = msg.from; // sender's phone number
 
             const quotedMsgId = msg.context?.id || null;
+
+            // Mark as read immediately (shows blue ticks)
+            if (msg.id) markAsRead(msg.id);
 
             if (msg.type === 'text') {
               await handleTextMessage(from, msg.text.body, quotedMsgId);

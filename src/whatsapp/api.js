@@ -11,6 +11,20 @@ const PHONE_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 /**
  * Send a plain text message to a WhatsApp number.
  */
+/**
+ * Mark a message as read (shows blue ticks — signals the bot is processing).
+ */
+export async function markAsRead(messageId) {
+  const url = `${BASE_URL}/${PHONE_ID}/messages`;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', status: 'read', message_id: messageId }),
+    });
+  } catch {}
+}
+
 export async function sendTextMessage(to, text) {
   const url = `${BASE_URL}/${PHONE_ID}/messages`;
   const body = {

@@ -427,6 +427,7 @@ bot.on('message', async (msg) => {
   }
 
   // --- AI-first intent classification ---
+  bot.sendChatAction(chatId, 'typing').catch(() => {});
   const settings = await getSettings(String(chatId));
   const activeReminders = await getActiveReminders(String(chatId));
   const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString(), activeReminders);
