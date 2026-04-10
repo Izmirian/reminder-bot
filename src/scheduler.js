@@ -269,6 +269,28 @@ export async function loadAllReminders() {
  * Schedule daily digest cron jobs for all users who have it enabled.
  */
 export function setupDailyDigest() {
+  // Daily cleanup at 3am — remove stale data
+  cron.schedule('0 3 * * *', async () => {
+    try {
+      const {
+        cleanupStaleReminders, purgeOldReminders,
+        purgeOldCompletedReminders, purgeOldChatHistory, purgeOldExpenses,
+      } = await import('./db.js');
+
+      const stale = await cleanupStaleReminders();
+      const purgedRem = await purgeOldReminders();
+      const purgedComp = await purgeOldCompletedReminders();
+      const purgedChat = await purgeOldChatHistory();
+      const purgedExp = await purgeOldExpenses();
+
+      if (stale || purgedRem || purgedComp || purgedChat || purgedExp) {
+        console.log(`[Cleanup] Stale reminders deactivated: ${stale}, Old reminders purged: ${purgedRem}, Old completed purged: ${purgedComp}, Old chat purged: ${purgedChat}, Old expenses purged: ${purgedExp}`);
+      }
+    } catch (err) {
+      console.error('[Cleanup] Error:', err.message);
+    }
+  });
+
   // Check for upcoming birthdays daily at 8am
   cron.schedule('0 8 * * *', async () => {
     if (!botInstance) return;

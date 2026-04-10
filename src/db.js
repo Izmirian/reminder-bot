@@ -646,6 +646,48 @@ export async function searchDocuments(chatId, searchQuery) {
     [chatId, `%${searchQuery}%`, `%${searchQuery}%`])).rows;
 }
 
+// --- Cleanup ---
+
+// Auto-deactivate one-off reminders older than 30 days that were never completed
+export async function cleanupStaleReminders() {
+  const result = await run(
+    "UPDATE reminders SET active = 0 WHERE active = 1 AND cron_expr IS NULL AND remind_at < NOW() - INTERVAL '30 days'"
+  );
+  return result.changes || 0;
+}
+
+// Delete deactivated reminders older than 90 days
+export async function purgeOldReminders() {
+  const result = await run(
+    "DELETE FROM reminders WHERE active = 0 AND created_at < NOW() - INTERVAL '90 days'"
+  );
+  return result.changes || 0;
+}
+
+// Delete completed reminders older than 6 months
+export async function purgeOldCompletedReminders() {
+  const result = await run(
+    "DELETE FROM completed_reminders WHERE completed_at < NOW() - INTERVAL '180 days'"
+  );
+  return result.changes || 0;
+}
+
+// Delete chat history older than 30 days
+export async function purgeOldChatHistory() {
+  const result = await run(
+    "DELETE FROM chat_history WHERE created_at < NOW() - INTERVAL '30 days'"
+  );
+  return result.changes || 0;
+}
+
+// Delete old expenses older than 1 year
+export async function purgeOldExpenses() {
+  const result = await run(
+    "DELETE FROM expenses WHERE created_at < NOW() - INTERVAL '365 days'"
+  );
+  return result.changes || 0;
+}
+
 // --- Chat History ---
 
 export async function addChatMessage(chatId, role, content) {
