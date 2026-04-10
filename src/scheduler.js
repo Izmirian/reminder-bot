@@ -269,6 +269,34 @@ export async function loadAllReminders() {
  * Schedule daily digest cron jobs for all users who have it enabled.
  */
 export function setupDailyDigest() {
+  // Check for upcoming birthdays daily at 8am
+  cron.schedule('0 8 * * *', async () => {
+    if (!botInstance) return;
+    try {
+      const { getUpcomingBirthdays } = await import('./db.js');
+      const allReminders = await getAllActiveReminders();
+      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      const today = new Date();
+      const todayMD = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+      for (const chatId of chatIds) {
+        const contacts = await getUpcomingBirthdays(chatId);
+        for (const c of contacts) {
+          if (!c.birthday) continue;
+          // Check if birthday is today or in 3 days
+          const bday = c.birthday; // format: MM-DD
+          const bdayDate = new Date(today.getFullYear(), parseInt(bday.split('-')[0]) - 1, parseInt(bday.split('-')[1]));
+          const daysUntil = Math.ceil((bdayDate - today) / 86400000);
+          if (daysUntil === 0) {
+            botInstance.sendMessage(chatId, `🎂 *${c.name}'s birthday is today!*`).catch(() => {});
+          } else if (daysUntil === 3) {
+            botInstance.sendMessage(chatId, `🎂 *${c.name}'s birthday is in 3 days* (${bday})`).catch(() => {});
+          }
+        }
+      }
+    } catch (err) { console.error('[Birthday Check]', err.message); }
+  });
+
   // Catch missed reminders every 2 minutes — fires any past-due reminders that were never sent
   cron.schedule('*/2 * * * *', async () => {
     if (!botInstance) return;
@@ -358,6 +386,31 @@ export function setupDailyDigest() {
           if (streak?.current_streak > 1) message += `\n     Streak: ${streak.current_streak} days`;
         }
       }
+
+      // Yesterday's spending
+      try {
+        const { getExpenseSummary } = await import('./db.js');
+        const yesterday = await getExpenseSummary(chatId, 1);
+        if (yesterday.count > 0) message += `\n\nYesterday's spending: *${yesterday.total.toFixed(2)}* (${yesterday.count} transactions)`;
+      } catch {}
+
+      // Upcoming birthdays
+      try {
+        const { getUpcomingBirthdays } = await import('./db.js');
+        const contacts = await getUpcomingBirthdays(chatId);
+        const today = new Date();
+        const upcoming = contacts.filter(c => {
+          if (!c.birthday) return false;
+          const [m, d] = c.birthday.split('-').map(Number);
+          const bd = new Date(today.getFullYear(), m - 1, d);
+          const diff = Math.ceil((bd - today) / 86400000);
+          return diff >= 0 && diff <= 7;
+        });
+        if (upcoming.length > 0) {
+          message += '\n\nUpcoming birthdays:';
+          for (const c of upcoming) message += `\n  🎂 ${c.name} (${c.birthday})`;
+        }
+      } catch {}
 
       message += '\n\nHave a good day!';
 
