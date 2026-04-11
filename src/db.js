@@ -20,6 +20,7 @@ async function initPostgres() {
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
+    statement_timeout: 30000, // 30s max per query
   });
 
   // Prevent crashes from idle connection drops
@@ -265,6 +266,11 @@ async function initPostgres() {
 
   isPostgres = true;
   console.log('[DB] Connected to Postgres');
+}
+
+// Graceful shutdown — close pool
+export async function closePool() {
+  if (pool) { await pool.end(); console.log('[DB] Pool closed'); }
 }
 
 async function initSqlite() {

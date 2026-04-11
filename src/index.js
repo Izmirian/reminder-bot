@@ -45,6 +45,8 @@ if (!TOKEN) {
 }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
+bot.on("error", (err) => console.error("[TG] Bot error:", err.message));
+bot.on("polling_error", (err) => console.error("[TG] Polling error:", err.message));
 initScheduler(bot);
 
 await loadAllReminders();

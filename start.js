@@ -25,3 +25,16 @@ import './src/index.js';
 
 // Start WhatsApp bot (webhook server)
 import './src/whatsapp/index.js';
+
+// Graceful shutdown — Railway sends SIGTERM before killing
+async function shutdown(signal) {
+  console.log(`[Shutdown] ${signal} received — cleaning up...`);
+  try {
+    const { closePool } = await import('./src/db.js');
+    await closePool();
+  } catch (e) { console.error('[Shutdown]', e.message); }
+  console.log('[Shutdown] Done. Exiting.');
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

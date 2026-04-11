@@ -7,10 +7,9 @@ const BASE_URL = `https://graph.facebook.com/${API_VERSION}`;
 
 const TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const PHONE_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const API_TIMEOUT = 15000; // 15 seconds
+const MAX_DOWNLOAD_SIZE = 20 * 1024 * 1024; // 20MB
 
-/**
- * Send a plain text message to a WhatsApp number.
- */
 /**
  * Mark a message as read (shows blue ticks — signals the bot is processing).
  */
@@ -21,10 +20,14 @@ export async function markAsRead(messageId) {
       method: 'POST',
       headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ messaging_product: 'whatsapp', status: 'read', message_id: messageId }),
+      signal: AbortSignal.timeout(API_TIMEOUT),
     });
-  } catch {}
+  } catch (e) { console.error('[WA API] markAsRead failed:', e.message); }
 }
 
+/**
+ * Send a plain text message to a WhatsApp number.
+ */
 export async function sendTextMessage(to, text) {
   const url = `${BASE_URL}/${PHONE_ID}/messages`;
   const body = {
@@ -41,6 +44,7 @@ export async function sendTextMessage(to, text) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(API_TIMEOUT),
   });
 
   if (!res.ok) {
@@ -79,6 +83,7 @@ export async function sendButtonMessage(to, bodyText, buttons) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(API_TIMEOUT),
   });
 
   if (!res.ok) {
@@ -116,6 +121,7 @@ export async function sendReminderMessage(to, reminderText, reminderId, snoozeCo
 export async function getMediaUrl(mediaId) {
   const res = await fetch(`${BASE_URL}/${mediaId}`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
+    signal: AbortSignal.timeout(API_TIMEOUT),
   });
   if (!res.ok) return null;
   const data = await res.json();
@@ -123,13 +129,22 @@ export async function getMediaUrl(mediaId) {
 }
 
 /**
- * Download media binary from WhatsApp.
+ * Download media binary from WhatsApp (capped at 20MB).
  */
 export async function downloadMedia(mediaUrl) {
   const res = await fetch(mediaUrl, {
     headers: { Authorization: `Bearer ${TOKEN}` },
+    signal: AbortSignal.timeout(API_TIMEOUT),
   });
   if (!res.ok) return null;
+
+  // Check file size before downloading
+  const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
+  if (contentLength > MAX_DOWNLOAD_SIZE) {
+    console.warn(`[WA API] File too large: ${contentLength} bytes (max ${MAX_DOWNLOAD_SIZE})`);
+    return null;
+  }
+
   return Buffer.from(await res.arrayBuffer());
 }
 
@@ -152,6 +167,7 @@ export async function sendImageMessage(to, imageId, caption) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(API_TIMEOUT),
   });
 
   if (!res.ok) {
@@ -196,6 +212,7 @@ export async function uploadMedia(buffer, mimeType) {
       'Content-Type': `multipart/form-data; boundary=${boundary}`,
     },
     body,
+    signal: AbortSignal.timeout(30000), // 30s for uploads (larger files)
   });
 
   if (!res.ok) {
@@ -204,5 +221,5 @@ export async function uploadMedia(buffer, mimeType) {
     return null;
   }
   const data = await res.json();
-  return data.id; // media ID for sending later
+  return data.id;
 }
