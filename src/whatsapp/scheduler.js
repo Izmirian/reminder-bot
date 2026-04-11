@@ -243,16 +243,13 @@ export function setupWhatsAppDigest() {
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const dateStr = now.toISOString().split('T')[0];
 
-    const allReminders = await getAllActiveReminders();
-    const waChatIds = [...new Set(
-      allReminders
-        .filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id))
-        .map(r => r.chat_id)
-    )];
+    // Query only users whose digest is due right now
+    const { getDigestUsers } = await import('../db.js');
+    const digestUsers = await getDigestUsers(currentTime);
+    const waChatIds = digestUsers.filter(u => u.chat_id.length >= 10 && /^\d+$/.test(u.chat_id)).map(u => u.chat_id);
 
     for (const chatId of waChatIds) {
       const settings = await getSettings(chatId);
-      if (!settings.daily_digest || settings.digest_time !== currentTime) continue;
 
       const todaysReminders = await getTodaysReminders(chatId, dateStr);
       if (todaysReminders.length === 0) continue;

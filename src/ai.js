@@ -8,6 +8,23 @@ let aiAvailable = true;
 let lastFailure = 0;
 const COOLDOWN_MS = 60_000;
 
+// Rate limiting — max 30 API calls per minute per chat, 200 total per minute
+const rateLimiter = { perChat: new Map(), totalCount: 0, lastReset: Date.now() };
+function checkRateLimit(chatId) {
+  const now = Date.now();
+  if (now - rateLimiter.lastReset > 60_000) {
+    rateLimiter.perChat.clear();
+    rateLimiter.totalCount = 0;
+    rateLimiter.lastReset = now;
+  }
+  rateLimiter.totalCount++;
+  const chatCount = (rateLimiter.perChat.get(chatId) || 0) + 1;
+  rateLimiter.perChat.set(chatId, chatCount);
+  if (chatCount > 30) { console.warn(`[Rate] Chat ${chatId} exceeded 30 req/min`); return false; }
+  if (rateLimiter.totalCount > 200) { console.warn('[Rate] Total exceeded 200 req/min'); return false; }
+  return true;
+}
+
 let initPromise = null;
 async function ensureClient() {
   if (!process.env.ANTHROPIC_API_KEY) return null;
@@ -230,6 +247,9 @@ export async function addToHistory(chatId, role, content) {
 }
 
 export async function classifyIntent(userMessage, timezone, currentTime, activeReminders, chatId) {
+  // Rate limit check
+  if (chatId && !checkRateLimit(chatId)) return null;
+
   const api = await ensureClient();
   if (!api) return null;
 

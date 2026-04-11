@@ -42,6 +42,13 @@ import {
 const pendingClearAll = new Set();
 const pendingClarification = new Map();
 const pendingPhotos = new Map(); // from -> { waMediaId, mimeType, caption }
+
+// Cleanup stale pending entries every 30 minutes
+setInterval(() => {
+  if (pendingClearAll.size > 0) pendingClearAll.clear();
+  if (pendingClarification.size > 0) { console.log(`[WA Cleanup] Clearing ${pendingClarification.size} stale clarifications`); pendingClarification.clear(); }
+  if (pendingPhotos.size > 0) { console.log(`[WA Cleanup] Clearing ${pendingPhotos.size} stale pending photos`); pendingPhotos.clear(); }
+}, 1800000);
 const lastCreated = new Map();
 
 // --- Helpers ---

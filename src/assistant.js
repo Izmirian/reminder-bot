@@ -289,7 +289,7 @@ export async function buildDashboard(chatId, timezone) {
       });
       msg += `\nNext: *${next.text}* — ${time}`;
     }
-  } catch {}
+  } catch (e) { /* dashboard section failed silently */ }
 
   // Lists
   try {
@@ -303,7 +303,7 @@ export async function buildDashboard(chatId, timezone) {
         else if (items.length > 5) msg += ` — ${items.slice(0, 3).join(', ')}...`;
       }
     }
-  } catch {}
+  } catch (e) { /* dashboard section failed silently */ }
 
   // Expenses
   try {
@@ -313,7 +313,7 @@ export async function buildDashboard(chatId, timezone) {
       msg += `\n\n*Spending:* ${week.total.toFixed(2)} this week (${week.count} transactions)`;
       if (today.count > 0) msg += `\nToday: ${today.total.toFixed(2)}`;
     }
-  } catch {}
+  } catch (e) { /* dashboard section failed silently */ }
 
   // Streaks
   try {
@@ -324,7 +324,7 @@ export async function buildDashboard(chatId, timezone) {
         msg += `\n${s.reminder_text}: ${s.current_streak} days`;
       }
     }
-  } catch {}
+  } catch (e) { /* dashboard section failed silently */ }
 
   // Upcoming birthdays
   try {
@@ -342,19 +342,19 @@ export async function buildDashboard(chatId, timezone) {
       msg += '\n\n*Birthdays:*';
       for (const c of upcoming) msg += `\n🎂 ${c.name} (${c.birthday})`;
     }
-  } catch {}
+  } catch (e) { /* dashboard section failed silently */ }
 
   // URL Monitors
   try {
     const monitors = await getUserMonitors(chatId);
     if (monitors.length > 0) msg += `\n\n*Monitors:* ${monitors.length} active`;
-  } catch {}
+  } catch (e) { /* dashboard section failed silently */ }
 
   // Memory count
   try {
     const memories = await getMemories(chatId);
     if (memories.length > 0) msg += `\n\n*Memory:* ${memories.length} facts saved`;
-  } catch {}
+  } catch (e) { /* dashboard section failed silently */ }
 
   // Timer
   const timer = activeTimers.get(chatId);
@@ -371,7 +371,7 @@ export async function buildDashboard(chatId, timezone) {
     if (settings.location) msg += ` | Location: ${settings.location}`;
     msg += `\nDigest: ${settings.daily_digest ? `ON at ${settings.digest_time}` : 'OFF'}`;
     msg += `\nCalendar: ${settings.google_tokens ? 'Connected' : 'Not connected'}`;
-  } catch {}
+  } catch (e) { /* dashboard section failed silently */ }
 
   return msg;
 }

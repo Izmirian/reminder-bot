@@ -39,7 +39,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 
 | Table | Purpose |
 |-------|---------|
-| `reminders` | Core — 20+ columns including priority, media, shared_with, google_event_id |
+| `reminders` | Core — 20+ columns including priority, media, shared_with, google_event_id, project_id |
 | `settings` | Per-user — timezone, digest, location, google_tokens |
 | `completed_reminders` | Completion log with day/hour/minute for pattern detection |
 | `streaks` | Recurring reminder completion streaks |
@@ -50,11 +50,15 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | `memory` | Conversation facts the bot remembers |
 | `expenses` | Spending tracker with categories |
 | `documents` | Stored files/PDFs with binary data |
-| `chat_history` | Persisted conversation history (200 msgs per chat) |
+| `chat_history` | Persisted conversation history (200 msgs per chat, 50 sent to AI) |
+| `projects` | Task grouping by project |
+| `pins` | Pinned important messages |
+| `followups` | People/things you're waiting on |
+| `action_log` | Universal undo — last 20 actions per chat |
 
 ## AI Intent System
 
-The bot classifies every message into one of 13 intents via Claude Sonnet:
+The bot classifies every message into one of 18 intents via Claude Sonnet:
 
 1. `reminder` — set reminders with priority, sharing, notes
 2. `chat` — conversation, math, timezone, translation (multi-language)
@@ -69,6 +73,11 @@ The bot classifies every message into one of 13 intents via Claude Sonnet:
 11. `expense` — log spending, view summaries
 12. `timer` — pomodoro/focus timers
 13. `summarize` — fetch and summarize URLs
+14. `project` — group tasks by project (create, add_task, show, archive)
+15. `pin` — pin important messages for quick reference
+16. `followup` — track things you're waiting on from people
+17. `research` — multi-source web research and price comparison
+18. `email` — draft emails with to/subject/body
 
 ## Conversation History
 
@@ -85,11 +94,22 @@ The bot classifies every message into one of 13 intents via Claude Sonnet:
 | `*/2 * * * *` | Missed reminder safety net — fires unfired past-due reminders |
 | `*/15 * * * *` | Google Calendar sync — polls for new events |
 | `*/30 * * * *` | URL monitor check — content hash comparison |
-| `0 */6 * * *` | Ignored reminder alerts (3+ days without response) |
-| `0 3 * * *` | Auto-cleanup — prune stale data |
+| `0 */6 * * *` | Ignored reminder alerts + follow-up due notifications |
+| `0 */12 * * *` | Idle check-in — notifies if 2+ days without messaging |
+| `0 3 * * *` | Auto-cleanup — prune stale data (30d reminders, 90d deactivated, 6mo completed) |
 | `0 8 * * *` | Birthday check — notify today + 3 days ahead |
-| `* * * * *` | Daily digest check — fires at user's configured time |
+| `* * * * *` | Daily digest — optimized: queries only users with matching digest_time |
+| `0 19 * * 0` | Week planning — Sunday 7pm overview |
+| `0 21 * * 1-6` | EOD recap — Mon-Sat 9pm (spending, pending, tomorrow's schedule) |
 | `0 21 * * 0` | Weekly summary — Sundays 9pm |
+
+## Safety & Performance
+
+- **Rate limiting:** 30 API calls/min per chat, 200 total/min
+- **Memory management:** All in-memory Maps capped at 500 entries, pending Maps auto-cleared every 30 min
+- **DB indexes:** 13 indexes on frequently queried columns
+- **Conversation history:** 200 messages stored in Postgres, last 50 sent to AI per request
+- **Auto-cleanup cron:** Daily at 3am prunes stale reminders (30d), deactivated (90d), completed (6mo), chat history (30d), expenses (1yr)
 
 ## Important Patterns
 

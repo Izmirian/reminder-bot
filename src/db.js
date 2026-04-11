@@ -456,6 +456,11 @@ export async function setLocation(chatId, location) {
   await run('UPDATE settings SET location = ? WHERE chat_id = ?', [location, chatId]);
 }
 
+// Get users whose digest is due at a specific time (efficient — no full table scan)
+export async function getDigestUsers(digestTime) {
+  return (await query('SELECT chat_id FROM settings WHERE daily_digest = 1 AND digest_time = ?', [digestTime])).rows;
+}
+
 export async function setDailyDigest(chatId, enabled, time) {
   await getSettings(chatId);
   await run('UPDATE settings SET daily_digest = ?, digest_time = ? WHERE chat_id = ?', [enabled ? 1 : 0, time || '08:00', chatId]);

@@ -496,14 +496,14 @@ export function setupDailyDigest() {
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const dateStr = now.toISOString().split('T')[0];
 
-    // This is a simple approach — for production you'd query settings more efficiently
-    const allReminders = await getAllActiveReminders();
-    const chatIds = [...new Set(allReminders.map(r => r.chat_id))];
+    // Query only users whose digest is due right now (instead of fetching ALL users every minute)
+    const { getDigestUsers } = await import('./db.js');
+    const digestUsers = await getDigestUsers(currentTime);
+    // Filter to Telegram users only (non-phone-number IDs)
+    const chatIds = digestUsers.filter(u => !(u.chat_id.length >= 10 && /^\d+$/.test(u.chat_id))).map(u => u.chat_id);
 
     for (const chatId of chatIds) {
       const settings = await getSettings(chatId);
-      if (!settings.daily_digest) continue;
-      if (settings.digest_time !== currentTime) continue;
 
       const todaysReminders = await getTodaysReminders(chatId, dateStr);
       if (todaysReminders.length === 0) continue;

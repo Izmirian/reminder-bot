@@ -208,6 +208,17 @@ bot.on('callback_query', async (query) => {
 // Store pending photos waiting for a time
 const pendingPhotos = new Map();
 
+// Cleanup stale pending entries every 30 minutes
+setInterval(() => {
+  const staleThreshold = Date.now() - 3600000; // 1 hour
+  for (const [key] of pendingClarification) {
+    pendingClarification.delete(key); // No timestamp, just clear all older than interval
+  }
+  // pendingPhotos and pendingForwards — clear all (if user hasn't responded in 30 min, they forgot)
+  if (pendingPhotos.size > 0) { console.log(`[Cleanup] Clearing ${pendingPhotos.size} stale pending photos`); pendingPhotos.clear(); }
+  if (pendingForwards.size > 0) { console.log(`[Cleanup] Clearing ${pendingForwards.size} stale pending forwards`); pendingForwards.clear(); }
+}, 1800000); // 30 minutes
+
 // Store pending forwarded messages waiting for a time
 const pendingForwards = new Map(); // chatId -> { text, msgId }
 
