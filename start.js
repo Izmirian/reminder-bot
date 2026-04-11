@@ -4,6 +4,14 @@
  */
 import 'dotenv/config';
 
+// Validate required environment variables
+const required = ['DATABASE_URL', 'TELEGRAM_BOT_TOKEN', 'ANTHROPIC_API_KEY', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'];
+const missing = required.filter(k => !process.env[k]);
+if (missing.length > 0) {
+  console.error(`FATAL: Missing env vars: ${missing.join(', ')}`);
+  process.exit(1);
+}
+
 // Prevent process crashes from unhandled errors
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);

@@ -20,7 +20,7 @@ import {
 async function fetchWeather(location) {
   if (!location) return null;
   try {
-    const res = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=j1`);
+    const res = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=j1`, { signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
     const data = await res.json();
     const current = data.current_condition?.[0];
@@ -294,7 +294,7 @@ export function setupDailyDigest() {
         if (hoursSince >= 48 && hoursSince < 60) { // Between 2-2.5 days
           const active = await getActiveReminders(chatId);
           if (active.length > 0) {
-            botInstance.sendMessage(chatId, `Hey! You have *${active.length}* pending reminder${active.length > 1 ? 's' : ''}. Need anything?`, { parse_mode: 'Markdown' }).catch(() => {});
+            botInstance.sendMessage(chatId, `Hey! You have *${active.length}* pending reminder${active.length > 1 ? 's' : ''}. Need anything?`, { parse_mode: 'Markdown' }).catch(e => console.error("[Send]", e.message));
           }
         }
       }
@@ -311,7 +311,7 @@ export function setupDailyDigest() {
       for (const chatId of chatIds) {
         const due = await getDueFollowups(chatId);
         for (const f of due) {
-          botInstance.sendMessage(chatId, `*Follow-up due:* ${f.person} — ${f.subject}\nSay "followup ${f.id} done" when resolved.`, { parse_mode: 'Markdown' }).catch(() => {});
+          botInstance.sendMessage(chatId, `*Follow-up due:* ${f.person} — ${f.subject}\nSay "followup ${f.id} done" when resolved.`, { parse_mode: 'Markdown' }).catch(e => console.error("[Send]", e.message));
         }
       }
     } catch (err) { console.error('[Follow-up Check]', err.message); }
@@ -348,7 +348,7 @@ export function setupDailyDigest() {
           msg += '\n\nNothing scheduled for tomorrow.';
         }
         msg += '\n\nGood night!';
-        botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(() => {});
+        botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(e => console.error("[Send]", e.message));
       }
     } catch (err) { console.error('[EOD Recap]', err.message); }
   });
@@ -390,7 +390,7 @@ export function setupDailyDigest() {
         if (weekSpend.count > 0) msg += `\n\nLast week spending: *${weekSpend.total.toFixed(2)}*`;
         if (followups.length > 0) msg += `\n\nPending follow-ups: *${followups.length}*`;
         msg += '\n\nHave a great week!';
-        botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(() => {});
+        botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(e => console.error("[Send]", e.message));
       }
     } catch (err) { console.error('[Week Planning]', err.message); }
   });
@@ -437,9 +437,9 @@ export function setupDailyDigest() {
           if (bdayDate < today) bdayDate.setFullYear(today.getFullYear() + 1);
           const daysUntil = Math.ceil((bdayDate - today) / 86400000);
           if (daysUntil === 0) {
-            botInstance.sendMessage(chatId, `🎂 *${c.name}'s birthday is today!*`).catch(() => {});
+            botInstance.sendMessage(chatId, `🎂 *${c.name}'s birthday is today!*`).catch(e => console.error("[Send]", e.message));
           } else if (daysUntil === 3) {
-            botInstance.sendMessage(chatId, `🎂 *${c.name}'s birthday is in 3 days* (${bday})`).catch(() => {});
+            botInstance.sendMessage(chatId, `🎂 *${c.name}'s birthday is in 3 days* (${bday})`).catch(e => console.error("[Send]", e.message));
           }
         }
       }
@@ -619,7 +619,7 @@ export function setupDailyDigest() {
         if (created.length > 0 && botInstance) {
           botInstance.sendMessage(user.chat_id,
             `Synced ${created.length} event${created.length === 1 ? '' : 's'} from Calendar:\n${created.map(e => `- ${e}`).join('\n')}`,
-          ).catch(() => {});
+          ).catch(e => console.error("[Send]", e.message));
         }
       }
     } catch (err) {

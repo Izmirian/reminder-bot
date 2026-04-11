@@ -242,10 +242,10 @@ bot.on('message', async (msg) => {
     const mimeType = msg.document.mime_type || '';
 
     try {
-      bot.sendChatAction(chatId, 'typing').catch(() => {});
+      bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message));
       const file = await bot.getFile(msg.document.file_id);
       const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
-      const res = await fetch(fileUrl);
+      const res = await fetch(fileUrl, { signal: AbortSignal.timeout(15000) });
       const buffer = Buffer.from(await res.arrayBuffer());
 
       if (mimeType.includes('pdf')) {
@@ -281,11 +281,11 @@ bot.on('message', async (msg) => {
       // Check if user wants analysis
       const analyzeKeywords = /analyz|summariz|read this|what is this|what does|extract|report|review|explain|translate|describe|tell me about|check this|look at/i;
       if (caption && analyzeKeywords.test(caption)) {
-        bot.sendChatAction(chatId, 'typing').catch(() => {});
+        bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message));
         const photoId = msg.photo[msg.photo.length - 1].file_id; // Largest photo
         const file = await bot.getFile(photoId);
         const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
-        const res = await fetch(fileUrl);
+        const res = await fetch(fileUrl, { signal: AbortSignal.timeout(15000) });
         const buffer = Buffer.from(await res.arrayBuffer());
         const { analyzeImage } = await import('./analyze.js');
         const result = await analyzeImage(buffer, 'image/jpeg', caption);
@@ -329,7 +329,7 @@ bot.on('message', async (msg) => {
     } catch (err) {
       console.error('[Photo error]', err);
       pendingPhotos.set(String(chatId), { msgId, text: caption || 'Photo reminder' });
-      bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?').catch(() => {});
+      bot.sendMessage(chatId, 'Got the photo! When should I remind you about it?').catch(e => console.error("[Send]", e.message));
     }
     return;
   }
@@ -423,7 +423,7 @@ bot.on('message', async (msg) => {
     // Check if user wants to analyze the pending photo
     if (/^(analyz|read|summariz|explain|describe|what|report|extract|check|review|translate)/i.test(lower)) {
       pendingPhotos.delete(String(chatId));
-      bot.sendChatAction(chatId, 'typing').catch(() => {});
+      bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message));
       // Download the photo for analysis
       try {
         const photoFile = await bot.getFile(String(photo.msgId));
@@ -513,7 +513,7 @@ bot.on('message', async (msg) => {
   }
 
   // --- AI-first intent classification ---
-  bot.sendChatAction(chatId, 'typing').catch(() => {});
+  bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message));
   const settings = await getSettings(String(chatId));
   const activeReminders = await getActiveReminders(String(chatId));
   const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString(), activeReminders, String(chatId));
@@ -715,7 +715,7 @@ bot.on('message', async (msg) => {
     }
     if (aiResult.intent === 'pin') { bot.sendMessage(chatId, await handlePinIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
     if (aiResult.intent === 'followup') { bot.sendMessage(chatId, await handleFollowupIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
-    if (aiResult.intent === 'research') { bot.sendChatAction(chatId, 'typing').catch(() => {}); bot.sendMessage(chatId, await handleResearchIntent(aiResult), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'research') { bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message)); bot.sendMessage(chatId, await handleResearchIntent(aiResult), { parse_mode: 'Markdown' }); return; }
     if (aiResult.intent === 'email') {
       const draft = handleEmailIntent(aiResult);
       bot.sendMessage(chatId, `*Email Draft*\nTo: ${draft.to}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_Send this from your email app._`, { parse_mode: 'Markdown' });

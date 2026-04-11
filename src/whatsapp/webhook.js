@@ -12,8 +12,22 @@ const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'selfreminder_webhook_
 export function createWebhookServer() {
   const app = express();
   app.use(express.json({
+    limit: '1mb',
     verify: (req, res, buf) => { req.rawBody = buf; },
   }));
+
+  // Message deduplication — prevent double-processing from Meta retries
+  const processedMessages = new Set();
+  function isDuplicate(msgId) {
+    if (!msgId) return false;
+    if (processedMessages.has(msgId)) return true;
+    processedMessages.add(msgId);
+    if (processedMessages.size > 10000) {
+      const first = processedMessages.values().next().value;
+      processedMessages.delete(first);
+    }
+    return false;
+  }
 
   // Verify Meta webhook signature
   function verifySignature(req) {
@@ -69,6 +83,9 @@ export function createWebhookServer() {
             const from = msg.from; // sender's phone number
 
             const quotedMsgId = msg.context?.id || null;
+
+            // Deduplicate — skip if already processed (Meta retry)
+            if (isDuplicate(msg.id)) continue;
 
             // Mark as read immediately (shows blue ticks)
             if (msg.id) markAsRead(msg.id);
@@ -133,9 +150,17 @@ export function createWebhookServer() {
     }
   });
 
-  // Health check
-  app.get('/', (req, res) => {
-    res.json({ status: 'ok', service: 'WhatsApp Reminder Bot' });
+  // Health check — pings DB to verify full stack is working
+  app.get('/', async (req, res) => {
+    try {
+      const pg = await import('pg');
+      const pool = new pg.default.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 1 });
+      await pool.query('SELECT 1');
+      pool.end();
+      res.json({ status: 'ok', service: 'WhatsApp Reminder Bot', db: 'connected', uptime: Math.floor(process.uptime()) });
+    } catch (err) {
+      res.status(503).json({ status: 'error', service: 'WhatsApp Reminder Bot', db: 'disconnected', error: err.message });
+    }
   });
 
   return app;

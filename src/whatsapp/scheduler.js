@@ -190,7 +190,7 @@ export async function loadWhatsAppReminders() {
 async function fetchWeather(location) {
   if (!location) return null;
   try {
-    const res = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=j1`);
+    const res = await fetch(`https://wttr.in/${encodeURIComponent(location)}?format=j1`, { signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
     const data = await res.json();
     const current = data.current_condition?.[0];
@@ -215,8 +215,8 @@ export function setupWhatsAppDigest() {
           const bdayDate = new Date(today.getFullYear(), m - 1, d);
           if (bdayDate < today) bdayDate.setFullYear(today.getFullYear() + 1);
           const daysUntil = Math.ceil((bdayDate - today) / 86400000);
-          if (daysUntil === 0) sendTextMessage(chatId, `🎂 *${c.name}'s birthday is today!*`).catch(() => {});
-          else if (daysUntil === 3) sendTextMessage(chatId, `🎂 *${c.name}'s birthday is in 3 days* (${c.birthday})`).catch(() => {});
+          if (daysUntil === 0) sendTextMessage(chatId, `🎂 *${c.name}'s birthday is today!*`).catch(e => console.error("[Send]", e.message));
+          else if (daysUntil === 3) sendTextMessage(chatId, `🎂 *${c.name}'s birthday is in 3 days* (${c.birthday})`).catch(e => console.error("[Send]", e.message));
         }
       }
     } catch (err) { console.error('[WA Birthday Check]', err.message); }
@@ -327,7 +327,7 @@ export function setupWhatsAppDigest() {
         if (created.length > 0) {
           sendTextMessage(user.chat_id,
             `Synced ${created.length} event${created.length === 1 ? '' : 's'} from Calendar:\n${created.map(e => `- ${e}`).join('\n')}`,
-          ).catch(() => {});
+          ).catch(e => console.error("[Send]", e.message));
         }
       }
     } catch (err) {
@@ -347,7 +347,7 @@ export function setupWhatsAppDigest() {
         const hoursSince = (Date.now() - new Date(lastMsg).getTime()) / 3600000;
         if (hoursSince >= 48 && hoursSince < 60) {
           const active = await getActive(chatId);
-          if (active.length > 0) sendTextMessage(chatId, `Hey! You have *${active.length}* pending reminder${active.length > 1 ? 's' : ''}. Need anything?`).catch(() => {});
+          if (active.length > 0) sendTextMessage(chatId, `Hey! You have *${active.length}* pending reminder${active.length > 1 ? 's' : ''}. Need anything?`).catch(e => console.error("[Send]", e.message));
         }
       }
     } catch (err) { console.error('[WA Idle Check]', err.message); }
@@ -362,7 +362,7 @@ export function setupWhatsAppDigest() {
       for (const chatId of waChatIds) {
         const due = await getDueFollowups(chatId);
         for (const f of due) {
-          sendTextMessage(chatId, `*Follow-up due:* ${f.person} — ${f.subject}\nSay "followup ${f.id} done" when resolved.`).catch(() => {});
+          sendTextMessage(chatId, `*Follow-up due:* ${f.person} — ${f.subject}\nSay "followup ${f.id} done" when resolved.`).catch(e => console.error("[Send]", e.message));
         }
       }
     } catch (err) { console.error('[WA Follow-up Check]', err.message); }
@@ -393,7 +393,7 @@ export function setupWhatsAppDigest() {
           }
         }
         msg += '\n\nGood night!';
-        sendTextMessage(chatId, msg).catch(() => {});
+        sendTextMessage(chatId, msg).catch(e => console.error("[Send]", e.message));
       }
     } catch (err) { console.error('[WA EOD Recap]', err.message); }
   });
@@ -421,7 +421,7 @@ export function setupWhatsAppDigest() {
         if (weekSpend.count > 0) msg += `\n\nLast week: *${weekSpend.total.toFixed(2)}*`;
         if (followups.length > 0) msg += `\nFollow-ups: *${followups.length}*`;
         msg += '\n\nHave a great week!';
-        sendTextMessage(chatId, msg).catch(() => {});
+        sendTextMessage(chatId, msg).catch(e => console.error("[Send]", e.message));
       }
     } catch (err) { console.error('[WA Week Planning]', err.message); }
   });
