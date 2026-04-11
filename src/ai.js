@@ -289,7 +289,7 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
 
     // Use Haiku for simple intents (cheaper), Sonnet for complex ones
     const needsSonnet = needsFullContext || lowerMsg.length > 200 || /summariz|research|compar|analyz|translate|explain|draft.*email/i.test(lowerMsg);
-    const model = needsSonnet ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-20250414';
+    const model = needsSonnet ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20251001';
     const maxTokens = needsSonnet ? 800 : 400;
 
     const response = await api.messages.create({
