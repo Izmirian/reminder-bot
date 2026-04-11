@@ -19,6 +19,11 @@ async function initPostgres() {
     ssl: process.env.DATABASE_URL?.includes('railway') ? { rejectUnauthorized: false } : false,
   });
 
+  // Prevent crashes from idle connection drops
+  pool.on('error', (err) => {
+    console.error('[DB] Pool error (connection will be retried):', err.message);
+  });
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reminders (
       id SERIAL PRIMARY KEY,

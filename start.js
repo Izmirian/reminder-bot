@@ -4,6 +4,14 @@
  */
 import 'dotenv/config';
 
+// Prevent process crashes from unhandled errors
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason);
+});
+
 // Start Telegram bot
 import './src/index.js';
 

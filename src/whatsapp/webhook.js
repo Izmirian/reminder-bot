@@ -3,6 +3,7 @@
  * Meta sends incoming messages here via POST, and verifies via GET.
  */
 import express from 'express';
+import crypto from 'crypto';
 import { handleTextMessage, handleButtonReply, handleImageMessage, handleDocumentMessage } from './handler.js';
 import { markAsRead } from './api.js';
 
@@ -10,7 +11,21 @@ const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'selfreminder_webhook_
 
 export function createWebhookServer() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({
+    verify: (req, res, buf) => { req.rawBody = buf; },
+  }));
+
+  // Verify Meta webhook signature
+  function verifySignature(req) {
+    const signature = req.headers['x-hub-signature-256'];
+    if (!signature || !process.env.META_APP_SECRET) return true; // Skip if no secret configured
+    try {
+      const expected = 'sha256=' + crypto.createHmac('sha256', process.env.META_APP_SECRET)
+        .update(req.rawBody)
+        .digest('hex');
+      return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    } catch { return false; }
+  }
 
   // Webhook verification (Meta sends a GET to verify your endpoint)
   app.get('/webhook', (req, res) => {
@@ -29,6 +44,12 @@ export function createWebhookServer() {
 
   // Incoming messages (Meta sends a POST)
   app.post('/webhook', async (req, res) => {
+    // Verify request is from Meta
+    if (!verifySignature(req)) {
+      console.warn('[Webhook] Invalid signature — rejecting');
+      return res.sendStatus(403);
+    }
+
     // Always respond 200 quickly to avoid retries
     res.sendStatus(200);
 
