@@ -461,7 +461,7 @@ export async function handleProjectIntent(chatId, aiResult, timezone) {
       await createProject(chatId, name);
       project = await getProject(chatId, name);
     }
-    // Create as a reminder without time — will need time later
+    if (!project) return `Couldn't create project "${name}". Try again.`;
     return { projectId: project.id, taskText, needsTime: true };
   }
 
@@ -544,12 +544,13 @@ export async function handleFollowupIntent(chatId, aiResult) {
 export async function handleResearchIntent(aiResult) {
   const { query: searchQuery, type } = aiResult;
   try {
-    // Fetch from multiple search result pages
-    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}&num=5`;
+    // Use DuckDuckGo HTML (doesn't block bots like Google does)
+    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(searchQuery)}`;
     const res = await fetch(searchUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ReminderBot/1.0)' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
       signal: AbortSignal.timeout(15000),
     });
+    if (!res.ok) return `Search returned ${res.status}. Try a different query.`;
     let html = await res.text();
     // Strip to text
     html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
@@ -557,6 +558,8 @@ export async function handleResearchIntent(aiResult) {
     html = html.replace(/<[^>]+>/g, ' ');
     html = html.replace(/\s+/g, ' ').trim();
     if (html.length > 4000) html = html.substring(0, 4000);
+
+    if (html.length < 100) return 'No useful search results found. Try rephrasing your query.';
 
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic();
