@@ -226,7 +226,7 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 import { addChatMessage, getChatHistory as dbGetChatHistory } from './db.js';
 
 export async function addToHistory(chatId, role, content) {
-  try { await addChatMessage(chatId, role, content); } catch {}
+  try { await addChatMessage(chatId, role, content); } catch (e) { console.error('[History]', e.message); }
 }
 
 export async function classifyIntent(userMessage, timezone, currentTime, activeReminders, chatId) {

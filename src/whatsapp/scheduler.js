@@ -21,7 +21,15 @@ import { buildContextualMessage } from '../context.js';
 const activeJobs = new Map();
 
 // Map WhatsApp message IDs (wamid) to reminder IDs (for reply-to feature)
-export const messageReminderMap = new Map(); // wamid -> reminderId
+// Map WhatsApp message IDs to reminder IDs — capped at 500 entries
+export const messageReminderMap = new Map();
+function addToWaMessageMap(wamid, reminderId) {
+  messageReminderMap.set(wamid, reminderId);
+  if (messageReminderMap.size > 500) {
+    const keys = [...messageReminderMap.keys()].slice(0, 100);
+    keys.forEach(k => messageReminderMap.delete(k));
+  }
+}
 
 function getNextCronDate() {
   const next = new Date();
@@ -56,7 +64,7 @@ async function fireReminder(reminder) {
     }
     // Track message ID for reply-to feature
     const wamid = apiResult?.messages?.[0]?.id;
-    if (wamid) messageReminderMap.set(wamid, reminder.id);
+    if (wamid) addToWaMessageMap(wamid, reminder.id);
     await markReminderFired(reminder.id);
   } catch (err) {
     console.error(`[WhatsApp] Failed to send reminder ${reminder.id}:`, err.message);

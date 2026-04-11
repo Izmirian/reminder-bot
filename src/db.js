@@ -50,7 +50,7 @@ async function initPostgres() {
       location TEXT
     )
   `);
-  try { await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS location TEXT`); } catch {}
+  try { await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS location TEXT`); } catch (e) { console.error('[DB] Migration:', e.message); }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS completed_reminders (
@@ -177,7 +177,21 @@ async function initPostgres() {
     )
   `);
   // Index for fast lookups
-  try { await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id ON chat_history(chat_id, created_at DESC)`); } catch {}
+  // Performance indexes
+  try {
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id ON chat_history(chat_id, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reminders_chat_active ON reminders(chat_id, active)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reminders_remind_at ON reminders(remind_at) WHERE active = 1`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_completed_chat_date ON completed_reminders(chat_id, completed_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_lists_chat ON lists(chat_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_contacts_chat ON contacts(chat_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_expenses_chat_date ON expenses(chat_id, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_journal_chat_date ON journal(chat_id, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_memory_chat ON memory(chat_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_followups_chat_status ON followups(chat_id, status)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pins_chat ON pins(chat_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_projects_chat ON projects(chat_id, active)`);
+  } catch (e) { console.error('[DB] Index creation error:', e.message); }
 
   // Projects table
   await pool.query(`
@@ -227,7 +241,7 @@ async function initPostgres() {
   `);
 
   // Add project_id to reminders
-  try { await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS project_id INTEGER`); } catch {}
+  try { await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS project_id INTEGER`); } catch (e) { console.error('[DB] Migration:', e.message); }
 
   // Migrations
   try {
@@ -239,7 +253,7 @@ async function initPostgres() {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS google_event_id TEXT`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
-  } catch {}
+  } catch (e) { console.error('[DB] Migration:', e.message); }
 
   isPostgres = true;
   console.log('[DB] Connected to Postgres');

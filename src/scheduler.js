@@ -39,7 +39,16 @@ const activeJobs = new Map(); // reminderId -> { timeout?, cron? }
 let botInstance = null;
 
 // Map bot message IDs to reminder IDs (for reply-to feature)
-export const messageReminderMap = new Map(); // botMessageId -> reminderId
+// Map bot message IDs to reminder IDs — capped at 500 entries to prevent memory leak
+export const messageReminderMap = new Map();
+function addToMessageMap(msgId, reminderId) {
+  messageReminderMap.set(msgId, reminderId);
+  if (messageReminderMap.size > 500) {
+    // Delete oldest entries (first 100)
+    const keys = [...messageReminderMap.keys()].slice(0, 100);
+    keys.forEach(k => messageReminderMap.delete(k));
+  }
+}
 
 export function init(bot) {
   botInstance = bot;
@@ -114,13 +123,13 @@ async function fireReminder(reminder) {
     } else {
       sentMsg = await botInstance.sendMessage(reminder.chat_id, message, options);
     }
-    if (sentMsg) messageReminderMap.set(sentMsg.message_id, reminder.id);
+    if (sentMsg) addToMessageMap(sentMsg.message_id, reminder.id);
     await markReminderFired(reminder.id);
   } catch (err) {
     // If reply fails (message deleted), send without reply
     try {
       const sentMsg = await botInstance.sendMessage(reminder.chat_id, message, options);
-      if (sentMsg) messageReminderMap.set(sentMsg.message_id, reminder.id);
+      if (sentMsg) addToMessageMap(sentMsg.message_id, reminder.id);
       await markReminderFired(reminder.id);
     } catch (err2) {
       console.error(`Failed to send reminder ${reminder.id}:`, err2.message);

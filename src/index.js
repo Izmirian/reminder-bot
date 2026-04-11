@@ -819,5 +819,11 @@ async function saveAndConfirm(chatId, parsed, settings) {
     `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${priorityLabel}${sharedLabel}${conflictLabel}${noteLabel}${mediaLabel}`,
     { parse_mode: 'Markdown' }
   );
-  if (sentMsg) messageReminderMap.set(sentMsg.message_id, id);
+  if (sentMsg) {
+    messageReminderMap.set(sentMsg.message_id, id);
+    if (messageReminderMap.size > 500) {
+      const keys = [...messageReminderMap.keys()].slice(0, 100);
+      keys.forEach(k => messageReminderMap.delete(k));
+    }
+  }
 }

@@ -493,7 +493,7 @@ async function saveAndConfirm(from, parsed, settings) {
   );
   // Track message ID for reply-to feature
   const wamid = apiResult?.messages?.[0]?.id;
-  if (wamid) messageReminderMap.set(wamid, id);
+  if (wamid) { messageReminderMap.set(wamid, id); if (messageReminderMap.size > 500) { [...messageReminderMap.keys()].slice(0, 100).forEach(k => messageReminderMap.delete(k)); } }
 }
 
 /**
@@ -834,7 +834,7 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
         const relTime = relativeTime(new Date(r.remindAt));
         const res = await sendTextMessage(from, `✅ *${r.text}*\n${timeStr} (in ${relTime})\nPhoto attached`);
         const wamid = res?.messages?.[0]?.id;
-        if (wamid) messageReminderMap.set(wamid, id);
+        if (wamid) { messageReminderMap.set(wamid, id); if (messageReminderMap.size > 500) { [...messageReminderMap.keys()].slice(0, 100).forEach(k => messageReminderMap.delete(k)); } }
         return res;
       }
 
