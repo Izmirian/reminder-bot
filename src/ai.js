@@ -271,8 +271,14 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
   }
 
   try {
-    // Build messages with conversation history for context (last 20 messages from DB)
-    const history = chatId ? await dbGetChatHistory(chatId, 50) : [];
+    // Smart history: skip for simple commands, reduce for most messages
+    const lowerMsg = userMessage.toLowerCase().trim();
+    const isSimpleCommand = /^(list|menu|help|dashboard|overview|status|streaks|undo|digest|pause|resume|show my|pinned|my projects)/.test(lowerMsg);
+    const needsFullContext = /\b(this|that|it|the|about|which|what did|follow.?up|earlier|before|last time|you said|remember)\b/i.test(lowerMsg);
+
+    const historyLimit = isSimpleCommand ? 0 : needsFullContext ? 20 : 10;
+    const history = (chatId && historyLimit > 0) ? await dbGetChatHistory(chatId, historyLimit) : [];
+
     const messages = [
       ...history,
       {
@@ -281,9 +287,14 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
       },
     ];
 
+    // Use Haiku for simple intents (cheaper), Sonnet for complex ones
+    const needsSonnet = needsFullContext || lowerMsg.length > 200 || /summariz|research|compar|analyz|translate|explain|draft.*email/i.test(lowerMsg);
+    const model = needsSonnet ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-20250414';
+    const maxTokens = needsSonnet ? 800 : 400;
+
     const response = await api.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 800,
+      model,
+      max_tokens: maxTokens,
       temperature: 0.3,
       system: buildPrompt(activeReminders),
       messages,
