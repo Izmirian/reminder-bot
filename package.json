@@ -4,13 +4,16 @@
   "description": "Personal reminder bot for Telegram and WhatsApp",
   "type": "module",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "start": "node start.js",
     "start:telegram": "node src/index.js",
     "start:whatsapp": "node src/whatsapp/index.js",
-    "start:both": "node src/index.js & node src/whatsapp/index.js",
     "dev:telegram": "node --watch src/index.js",
-    "dev:whatsapp": "node --watch src/whatsapp/index.js"
+    "dev:whatsapp": "node --watch src/whatsapp/index.js",
+    "test": "echo \"No tests configured yet\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

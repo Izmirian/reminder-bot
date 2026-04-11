@@ -87,8 +87,23 @@ export async function createEvent(chatId, reminder) {
 
     return event.data.id;
   } catch (err) {
+    // Retry once on transient errors (5xx, timeout)
+    if (err.code >= 500 || err.code === 'ETIMEDOUT') {
+      try {
+        await new Promise(r => setTimeout(r, 2000));
+        const retryEvent = await calendar.events.insert({
+          calendarId: 'primary',
+          resource: { summary: reminder.text, description: reminder.notes || '',
+            start: { dateTime: startTime.toISOString() }, end: { dateTime: endTime.toISOString() },
+            reminders: { useDefault: false, overrides: [] } },
+        });
+        if (retryEvent.data.id) await setGoogleEventId(reminder.id, retryEvent.data.id);
+        return retryEvent.data.id;
+      } catch (retryErr) {
+        console.error(`[GCal] Retry also failed for reminder ${reminder.id}:`, retryErr.message);
+      }
+    }
     console.error(`[GCal] Failed to create event for reminder ${reminder.id}:`, err.message);
-    // If token expired, clear tokens
     if (err.code === 401) await setGoogleTokens(chatId, null);
     return null;
   }

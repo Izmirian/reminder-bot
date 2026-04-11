@@ -5,7 +5,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 ## Architecture
 
 - **Runtime:** Node.js ES modules (`"type": "module"`)
-- **AI:** Claude Sonnet via `@anthropic-ai/sdk` — intent classification with 13 intents, conversation history, vision API
+- **AI:** Claude Sonnet via `@anthropic-ai/sdk` — intent classification with 18 intents, conversation history, vision API
 - **Database:** Postgres (Railway) with SQLite fallback (local dev). All DB functions are async.
 - **Telegram:** `node-telegram-bot-api` with long polling
 - **WhatsApp:** Express webhook server for Meta Cloud API v22.0
@@ -17,7 +17,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | File | Purpose |
 |------|---------|
 | `start.js` | Entry point — imports both bots |
-| `src/ai.js` | Claude AI intent classifier (13 intents), conversation history, prompt builder |
+| `src/ai.js` | Claude AI intent classifier (18 intents), conversation history, prompt builder |
 | `src/db.js` | All database operations — Postgres/SQLite dual-mode, 10+ tables |
 | `src/assistant.js` | Shared handlers for lists, contacts, journal, memory, expenses, timers, summarizer, dashboard |
 | `src/analyze.js` | Document/image analysis using Claude Vision API |
@@ -28,6 +28,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | `src/whatsapp/scheduler.js` | WhatsApp reminder scheduler, digest, birthday checks |
 | `src/whatsapp/api.js` | WhatsApp Cloud API client — send text, buttons, images, mark read |
 | `src/google-calendar.js` | Google Calendar OAuth2, event CRUD, two-way sync |
+| `src/config.js` | Centralized constants — timeouts, limits, retention periods |
 | `src/url-monitor.js` | URL change/price monitoring with content hashing |
 | `src/parser.js` | chrono-node fallback date parser with `looksLikeReminder()` gate |
 | `src/commands.js` | Telegram slash command handlers |
