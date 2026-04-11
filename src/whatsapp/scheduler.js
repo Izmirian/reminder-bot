@@ -80,8 +80,10 @@ async function fireReminder(reminder) {
     const fireCount = await getFireCount(reminder.id);
     if (fireCount < 3) {
       const refireTimeout = setTimeout(async () => {
-        const fresh = await getReminder(reminder.id);
-        if (fresh && fresh.active === 1) fireReminder(fresh);
+        try {
+          const fresh = await getReminder(reminder.id);
+          if (fresh && fresh.active === 1) await fireReminder(fresh);
+        } catch (e) { console.error(`[WA Refire] Error:`, e.message); }
       }, 5 * 60 * 1000);
       activeJobs.set(`refire:${reminder.id}`, { timeout: refireTimeout });
     }
@@ -112,7 +114,9 @@ export function scheduleReminder(reminder) {
       fireReminder(reminder);
       return;
     }
-    const timeout = setTimeout(() => fireReminder(reminder), delay);
+    const timeout = setTimeout(async () => {
+      try { await fireReminder(reminder); } catch (e) { console.error(`[WA Fire] Error:`, e.message); }
+    }, delay);
     activeJobs.set(reminder.id, { timeout });
   }
 }
@@ -324,6 +328,97 @@ export function setupWhatsAppDigest() {
     } catch (err) {
       console.error('[WA GCal Sync] Error:', err.message);
     }
+  });
+
+  // Idle check-in — every 12 hours (WhatsApp users)
+  cron.schedule('0 */12 * * *', async () => {
+    try {
+      const { getLastMessageTime, getActiveReminders: getActive } = await import('../db.js');
+      const allRems = await getAllActiveReminders();
+      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      for (const chatId of waChatIds) {
+        const lastMsg = await getLastMessageTime(chatId);
+        if (!lastMsg) continue;
+        const hoursSince = (Date.now() - new Date(lastMsg).getTime()) / 3600000;
+        if (hoursSince >= 48 && hoursSince < 60) {
+          const active = await getActive(chatId);
+          if (active.length > 0) sendTextMessage(chatId, `Hey! You have *${active.length}* pending reminder${active.length > 1 ? 's' : ''}. Need anything?`).catch(() => {});
+        }
+      }
+    } catch (err) { console.error('[WA Idle Check]', err.message); }
+  });
+
+  // Follow-up check — every 6 hours (WhatsApp users)
+  cron.schedule('0 */6 * * *', async () => {
+    try {
+      const { getDueFollowups } = await import('../db.js');
+      const allRems = await getAllActiveReminders();
+      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      for (const chatId of waChatIds) {
+        const due = await getDueFollowups(chatId);
+        for (const f of due) {
+          sendTextMessage(chatId, `*Follow-up due:* ${f.person} — ${f.subject}\nSay "followup ${f.id} done" when resolved.`).catch(() => {});
+        }
+      }
+    } catch (err) { console.error('[WA Follow-up Check]', err.message); }
+  });
+
+  // EOD recap — 9pm Mon-Sat (WhatsApp users)
+  cron.schedule('0 21 * * 1-6', async () => {
+    try {
+      const allRems = await getAllActiveReminders();
+      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      for (const chatId of waChatIds) {
+        const settings = await getSettings(chatId);
+        if (!settings.daily_digest) continue;
+        const { getExpenseSummary, getActiveReminders: getActive } = await import('../db.js');
+        const active = await getActive(chatId);
+        const todaySpend = await getExpenseSummary(chatId, 1);
+        const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toLocaleDateString('en-CA', { timeZone: settings.timezone });
+        const tomorrowRems = await getTodaysReminders(chatId, tomorrowStr);
+        let msg = '*End of Day*\n';
+        if (todaySpend.count > 0) msg += `\nSpent today: *${todaySpend.total.toFixed(2)}*`;
+        msg += `\nPending: *${active.length}*`;
+        if (tomorrowRems.length > 0) {
+          msg += `\n\n*Tomorrow (${tomorrowRems.length}):*`;
+          for (const r of tomorrowRems) {
+            const time = new Date(r.remind_at).toLocaleTimeString('en-US', { timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true });
+            msg += `\n  ${time} — ${r.text}`;
+          }
+        }
+        msg += '\n\nGood night!';
+        sendTextMessage(chatId, msg).catch(() => {});
+      }
+    } catch (err) { console.error('[WA EOD Recap]', err.message); }
+  });
+
+  // Week planning — Sunday 7pm (WhatsApp users)
+  cron.schedule('0 19 * * 0', async () => {
+    try {
+      const allRems = await getAllActiveReminders();
+      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      for (const chatId of waChatIds) {
+        const settings = await getSettings(chatId);
+        if (!settings.daily_digest) continue;
+        const { getExpenseSummary, getPendingFollowups, getActiveReminders: getActive } = await import('../db.js');
+        const active = await getActive(chatId);
+        const weekSpend = await getExpenseSummary(chatId, 7);
+        const followups = await getPendingFollowups(chatId);
+        const days = {}; const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        for (const r of active) { const key = new Date(r.remind_at).toLocaleDateString('en-CA', { timeZone: settings.timezone }); if (!days[key]) days[key] = []; days[key].push(r); }
+        let msg = '*Week Ahead*\n';
+        for (const day of Object.keys(days).sort().slice(0, 7)) {
+          const d = new Date(day);
+          msg += `\n*${dayNames[d.getDay()]}, ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}:*`;
+          for (const r of days[day]) { const time = new Date(r.remind_at).toLocaleTimeString('en-US', { timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true }); msg += `\n  ${time} — ${r.text}`; }
+        }
+        if (weekSpend.count > 0) msg += `\n\nLast week: *${weekSpend.total.toFixed(2)}*`;
+        if (followups.length > 0) msg += `\nFollow-ups: *${followups.length}*`;
+        msg += '\n\nHave a great week!';
+        sendTextMessage(chatId, msg).catch(() => {});
+      }
+    } catch (err) { console.error('[WA Week Planning]', err.message); }
   });
 
   // URL monitor check — every 30 minutes (WhatsApp recipients)

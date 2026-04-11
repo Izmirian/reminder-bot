@@ -145,8 +145,10 @@ async function fireReminder(reminder) {
     const fireCount = await getFireCount(reminder.id);
     if (fireCount < 3) {
       const refireTimeout = setTimeout(async () => {
-        const fresh = await getReminder(reminder.id);
-        if (fresh && fresh.active === 1) fireReminder(fresh);
+        try {
+          const fresh = await getReminder(reminder.id);
+          if (fresh && fresh.active === 1) await fireReminder(fresh);
+        } catch (e) { console.error(`[Refire] Error reminder ${reminder.id}:`, e.message); }
       }, 5 * 60 * 1000);
       activeJobs.set(`refire:${reminder.id}`, { timeout: refireTimeout });
     }
@@ -203,8 +205,8 @@ export function scheduleReminder(reminder) {
       return;
     }
 
-    const timeout = setTimeout(() => {
-      fireReminder(reminder);
+    const timeout = setTimeout(async () => {
+      try { await fireReminder(reminder); } catch (e) { console.error(`[Fire] Error reminder ${reminder.id}:`, e.message); }
     }, delay);
 
     activeJobs.set(reminder.id, { timeout });

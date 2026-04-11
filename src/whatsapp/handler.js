@@ -379,10 +379,6 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
     if (aiResult.intent === 'research') return sendTextMessage(from, await handleResearchIntent(aiResult));
     if (aiResult.intent === 'email') {
       const draft = handleEmailIntent(aiResult);
-      try {
-        const { mcp__05bab599_3748_46cb_9ee6_328de67583a2__gmail_create_draft: createDraft } = await import('../assistant.js');
-      } catch {}
-      // For now, format the draft and show it
       return sendTextMessage(from, `*Email Draft*\nTo: ${draft.to}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_Send this from your email app._`);
     }
 
@@ -424,8 +420,7 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
 
 async function handleUndoCommand(from) {
   // Try universal undo first (pins, follow-ups, projects)
-  const { handleUndo: universalUndo } = await import('../assistant.js');
-  const result = await universalUndo(from);
+  const result = await handleUndo(from);
   if (result !== 'Nothing to undo.') return sendTextMessage(from, result);
   // Fall back to reminder undo
   const last = await getLastDeactivated(from);

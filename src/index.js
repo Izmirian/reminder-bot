@@ -67,7 +67,11 @@ bot.onText(/\/cleartoday/, (msg) => handleClearToday(bot, msg));
 bot.onText(/\/cancel\s*(.*)/, (msg, match) => handleCancel(bot, msg, match));
 bot.onText(/\/edit\s*(.*)/, (msg, match) => handleEdit(bot, msg, match));
 bot.onText(/\/clearall/, (msg) => handleClearAll(bot, msg));
-bot.onText(/\/undo/, (msg) => handleUndo(bot, msg));
+bot.onText(/\/undo/, async (msg) => {
+  const uResult = await universalUndo(String(msg.chat.id));
+  if (uResult !== 'Nothing to undo.') { bot.sendMessage(msg.chat.id, uResult); return; }
+  handleUndo(bot, msg);
+});
 bot.onText(/\/summary/, (msg) => handleWeeklySummary(bot, msg));
 bot.onText(/\/pause/, (msg) => handlePause(bot, msg));
 bot.onText(/\/resume/, (msg) => handleResume(bot, msg));
@@ -519,7 +523,13 @@ bot.on('message', async (msg) => {
       if (cmd === 'clear_today') { await handleClearToday(bot, msg); return; }
       if (cmd === 'pause') { await handlePause(bot, msg); return; }
       if (cmd === 'resume') { await handleResume(bot, msg); return; }
-      if (cmd === 'undo') { await handleUndo(bot, msg); return; }
+      if (cmd === 'undo') {
+        // Try universal undo first (pins, follow-ups, projects)
+        const uResult = await universalUndo(String(chatId));
+        if (uResult !== 'Nothing to undo.') { bot.sendMessage(chatId, uResult); return; }
+        // Fall back to reminder undo
+        await handleUndo(bot, msg); return;
+      }
       if (cmd === 'summary') { await handleWeeklySummary(bot, msg); return; }
       if (cmd === 'dashboard') {
         const dash = await buildDashboard(String(chatId), settings.timezone);
