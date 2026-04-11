@@ -164,6 +164,38 @@ Classify the message into one of these intents and return a JSON object:
    - "summarize this: https://example.com/article" → url="https://example.com/article"
    - "what's this about? https://..." → url extracted from message
 
+14. **"project"** — The user wants to manage project groupings for tasks.
+   Return: { "intent": "project", "action": "create|list|show|add_task|archive", "name": "project name", "taskText": "task description or null" }
+   - "create project Wedding" → action=create, name="Wedding"
+   - "add to project Wedding: book venue" → action=add_task, name="Wedding", taskText="book venue"
+   - "show project Wedding" → action=show, name="Wedding"
+   - "my projects" → action=list
+   - "archive project Wedding" → action=archive, name="Wedding"
+
+15. **"pin"** — The user wants to pin/save important info.
+   Return: { "intent": "pin", "action": "save|list|remove", "content": "text to pin or null", "id": number or null }
+   - "pin this: meeting moved to Thursday" → action=save, content="meeting moved to Thursday"
+   - "pin: John's new number is 079..." → action=save, content="John's new number is 079..."
+   - "show my pins" or "pinned" → action=list
+   - "unpin 3" → action=remove, id=3
+
+16. **"followup"** — The user wants to track something they're waiting on from someone.
+   Return: { "intent": "followup", "action": "create|list|done", "person": "name", "subject": "what", "days": number or null, "id": number or null }
+   - "follow up with Sarah in 3 days about the proposal" → action=create, person="Sarah", subject="proposal", days=3
+   - "waiting on John for the invoice" → action=create, person="John", subject="invoice", days=3
+   - "show follow-ups" → action=list
+   - "followup 2 done" → action=done, id=2
+
+17. **"research"** — The user wants multi-source research or price comparison.
+   Return: { "intent": "research", "query": "what to research", "type": "general|price" }
+   - "research best restaurants in Amman" → query="best restaurants in Amman", type="general"
+   - "compare prices for iPhone 16 in Jordan" → query="iPhone 16 Jordan price", type="price"
+
+18. **"email"** — The user wants to draft an email.
+   Return: { "intent": "email", "to": "recipient name or email", "subject": "subject line", "body": "email body or key points" }
+   - "draft an email to John about the meeting" → to="John", subject="Meeting", body="key points about the meeting"
+   - "email sarah@company.com: project update is ready" → to="sarah@company.com", subject="Project Update", body="The project update is ready"
+
 Time-of-day phrases (these provide a specific time):
 - "morning" = 9:00 AM, "afternoon" = 2:00 PM, "evening" = 7:00 PM, "tonight" = 9:00 PM
 - "after lunch" = 1:00 PM, "after work" = 6:00 PM, "end of day" = 5:00 PM

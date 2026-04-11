@@ -34,7 +34,8 @@ import { getConversationalResponse } from './conversation.js';
 import {
   handleListIntent, handleContactIntent, handleJournalIntent,
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
-  buildDashboard,
+  buildDashboard, handleProjectIntent, handlePinIntent, handleFollowupIntent,
+  handleResearchIntent, handleEmailIntent, handleUndo as universalUndo, checkConflicts,
 } from './assistant.js';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -682,6 +683,23 @@ bot.on('message', async (msg) => {
     if (aiResult.intent === 'expense') { bot.sendMessage(chatId, await handleExpenseIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
     if (aiResult.intent === 'timer') { bot.sendMessage(chatId, handleTimerIntent(String(chatId), aiResult, (msg) => bot.sendMessage(chatId, msg)), { parse_mode: 'Markdown' }); return; }
     if (aiResult.intent === 'summarize') { bot.sendMessage(chatId, await handleSummarizeIntent(aiResult.url, String(chatId))); return; }
+    if (aiResult.intent === 'project') {
+      const result = await handleProjectIntent(String(chatId), aiResult, settings.timezone);
+      if (result?.needsTime) {
+        pendingPhotos.set(String(chatId), { text: result.taskText, msgId: null });
+        bot.sendMessage(chatId, `Adding "${result.taskText}" to project. When should I remind you?`);
+        return;
+      }
+      bot.sendMessage(chatId, result, { parse_mode: 'Markdown' }); return;
+    }
+    if (aiResult.intent === 'pin') { bot.sendMessage(chatId, await handlePinIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'followup') { bot.sendMessage(chatId, await handleFollowupIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'research') { bot.sendChatAction(chatId, 'typing').catch(() => {}); bot.sendMessage(chatId, await handleResearchIntent(aiResult), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'email') {
+      const draft = handleEmailIntent(aiResult);
+      bot.sendMessage(chatId, `*Email Draft*\nTo: ${draft.to}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_Send this from your email app._`, { parse_mode: 'Markdown' });
+      return;
+    }
 
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {
@@ -781,12 +799,14 @@ async function saveAndConfirm(chatId, parsed, settings) {
   const noteLabel = parsed.notes ? `\nNote: ${parsed.notes}` : '';
   const priorityLabel = parsed.priority === 'urgent' ? '\nURGENT' : parsed.priority === 'low' ? '\nLow priority' : '';
   const sharedLabel = parsed.sharedWith?.length ? `\nShared with ${parsed.sharedWith.length} recipient${parsed.sharedWith.length === 1 ? '' : 's'}` : '';
+  const conflict = await checkConflicts(String(chatId), parsed.remindAt.toISOString());
+  const conflictLabel = conflict ? `\n${conflict}` : '';
   const hasPhoto = parsed.mediaType === 'reply' || pendingPhotos.has(String(chatId));
   const mediaLabel = hasPhoto ? '\nPhoto linked' : parsed.mediaType === 'link' ? `\n${parsed.mediaId}` : '';
 
   const sentMsg = await bot.sendMessage(
     chatId,
-    `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${priorityLabel}${sharedLabel}${noteLabel}${mediaLabel}`,
+    `✅ *${parsed.text}*\n${timeStr} (in ${relTime})${recurLabel}${priorityLabel}${sharedLabel}${conflictLabel}${noteLabel}${mediaLabel}`,
     { parse_mode: 'Markdown' }
   );
   if (sentMsg) messageReminderMap.set(sentMsg.message_id, id);

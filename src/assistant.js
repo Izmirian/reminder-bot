@@ -9,6 +9,11 @@ import {
   addMemory, getMemories, searchMemory, deleteMemory,
   addExpense, getExpenses, getExpenseSummary,
   getActiveReminders, getAllStreaks, getUserMonitors, getSettings,
+  createProject, getProjects, getProject, assignReminderToProject, getProjectReminders, archiveProject,
+  addPin, getPins, deletePin,
+  createFollowup, getPendingFollowups, completeFollowup,
+  logAction, deleteLastAction,
+  getRemindersNear, createReminder,
 } from './db.js';
 
 // Active timers per chat
@@ -409,4 +414,215 @@ export async function handleSummarizeIntent(url, chatId) {
   } catch (err) {
     return `Failed to summarize: ${err.message}`;
   }
+}
+
+/**
+ * Handle a "project" intent.
+ */
+export async function handleProjectIntent(chatId, aiResult, timezone) {
+  const { action, name, taskText } = aiResult;
+
+  if (action === 'create') {
+    await createProject(chatId, name);
+    await logAction(chatId, 'create_project', { name });
+    return `Project *${name}* created. Add tasks with "add to project ${name}: task description"`;
+  }
+
+  if (action === 'list') {
+    const projects = await getProjects(chatId);
+    if (projects.length === 0) return 'No active projects. Create one with "create project [name]"';
+    let msg = '*Your Projects*\n';
+    for (const p of projects) {
+      const tasks = await getProjectReminders(chatId, p.id);
+      msg += `\n*${p.name}* — ${tasks.length} tasks`;
+    }
+    return msg;
+  }
+
+  if (action === 'show') {
+    const project = await getProject(chatId, name);
+    if (!project) return `Project "${name}" not found.`;
+    const tasks = await getProjectReminders(chatId, project.id);
+    if (tasks.length === 0) return `*${project.name}* — no tasks yet. Add with "add to project ${name}: task"`;
+    let msg = `*${project.name}*\n`;
+    const letters = 'abcdefghijklmnopqrstuvwxyz';
+    tasks.forEach((t, i) => {
+      const time = new Date(t.remind_at).toLocaleString('en-US', {
+        timeZone: timezone, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true,
+      });
+      msg += `\n*${letters[i]})* ${t.text} — ${time}`;
+    });
+    return msg;
+  }
+
+  if (action === 'add_task' && taskText) {
+    let project = await getProject(chatId, name);
+    if (!project) {
+      await createProject(chatId, name);
+      project = await getProject(chatId, name);
+    }
+    // Create as a reminder without time — will need time later
+    return { projectId: project.id, taskText, needsTime: true };
+  }
+
+  if (action === 'archive') {
+    await archiveProject(chatId, name);
+    return `Project *${name}* archived.`;
+  }
+
+  return 'Not sure what to do with that project command.';
+}
+
+/**
+ * Handle a "pin" intent.
+ */
+export async function handlePinIntent(chatId, aiResult) {
+  const { action, content, id } = aiResult;
+
+  if (action === 'save' && content) {
+    const pinId = await addPin(chatId, content);
+    await logAction(chatId, 'pin', { id: pinId, content });
+    return `Pinned: "${content}"`;
+  }
+
+  if (action === 'list') {
+    const pins = await getPins(chatId);
+    if (pins.length === 0) return 'No pinned messages. Pin something with "pin: important info here"';
+    let msg = '*Pinned*\n';
+    for (const p of pins) {
+      const date = new Date(p.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      msg += `\n*#${p.id}* ${p.content} _(${date})_`;
+    }
+    return msg;
+  }
+
+  if (action === 'remove' && id) {
+    await deletePin(chatId, id);
+    await logAction(chatId, 'unpin', { id });
+    return `Unpinned #${id}`;
+  }
+
+  return 'Not sure what to do with that pin command.';
+}
+
+/**
+ * Handle a "followup" intent.
+ */
+export async function handleFollowupIntent(chatId, aiResult) {
+  const { action, person, subject, days, id } = aiResult;
+
+  if (action === 'create') {
+    const d = days || 3;
+    const followUpAt = new Date(Date.now() + d * 86400000).toISOString();
+    const fId = await createFollowup(chatId, person, subject, followUpAt);
+    await logAction(chatId, 'followup', { id: fId, person, subject });
+    return `Tracking: follow up with *${person}* about *${subject}* in ${d} days`;
+  }
+
+  if (action === 'list') {
+    const followups = await getPendingFollowups(chatId);
+    if (followups.length === 0) return 'No pending follow-ups.';
+    let msg = '*Follow-ups*\n';
+    for (const f of followups) {
+      const due = new Date(f.follow_up_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      msg += `\n*#${f.id}* ${f.person} — ${f.subject} (due ${due})`;
+    }
+    return msg;
+  }
+
+  if (action === 'done' && id) {
+    await completeFollowup(chatId, id);
+    return `Follow-up #${id} marked done.`;
+  }
+
+  return 'Not sure what to do with that follow-up.';
+}
+
+/**
+ * Handle a "research" intent — multi-source web search.
+ */
+export async function handleResearchIntent(aiResult) {
+  const { query: searchQuery, type } = aiResult;
+  try {
+    // Fetch from multiple search result pages
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}&num=5`;
+    const res = await fetch(searchUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ReminderBot/1.0)' },
+      signal: AbortSignal.timeout(15000),
+    });
+    let html = await res.text();
+    // Strip to text
+    html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+    html = html.replace(/<[^>]+>/g, ' ');
+    html = html.replace(/\s+/g, ' ').trim();
+    if (html.length > 4000) html = html.substring(0, 4000);
+
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const client = new Anthropic();
+    const prompt = type === 'price'
+      ? `Based on these search results, compare prices and options for: ${searchQuery}. List top options with prices in a clear format.`
+      : `Based on these search results, provide a comprehensive answer about: ${searchQuery}. Include key findings from multiple sources.`;
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 800,
+      messages: [{ role: 'user', content: `${prompt}\n\nSearch results:\n${html}` }],
+    });
+    return response.content[0]?.text || 'Could not find results.';
+  } catch (err) {
+    return `Research failed: ${err.message}`;
+  }
+}
+
+/**
+ * Handle an "email" intent — draft an email via Gmail MCP.
+ * Returns the draft info for the caller to send via Gmail API.
+ */
+export function handleEmailIntent(aiResult) {
+  return {
+    to: aiResult.to,
+    subject: aiResult.subject,
+    body: aiResult.body,
+    needsConfirmation: true,
+  };
+}
+
+/**
+ * Handle universal undo — reverts the last action.
+ */
+export async function handleUndo(chatId) {
+  const last = await deleteLastAction(chatId);
+  if (!last) return 'Nothing to undo.';
+
+  const data = typeof last.action_data === 'string' ? JSON.parse(last.action_data) : last.action_data;
+
+  if (last.action_type === 'pin') {
+    await deletePin(chatId, data.id);
+    return `Undone: unpinned "${data.content}"`;
+  }
+  if (last.action_type === 'unpin') {
+    await addPin(chatId, data.content || 'restored pin');
+    return 'Undone: pin restored';
+  }
+  if (last.action_type === 'followup') {
+    await completeFollowup(chatId, data.id);
+    return `Undone: removed follow-up with ${data.person}`;
+  }
+  if (last.action_type === 'create_project') {
+    await archiveProject(chatId, data.name);
+    return `Undone: archived project "${data.name}"`;
+  }
+
+  return `Undone: reverted ${last.action_type}`;
+}
+
+/**
+ * Check for conflicts near a given time.
+ */
+export async function checkConflicts(chatId, remindAt) {
+  const nearby = await getRemindersNear(chatId, remindAt, 30);
+  if (nearby.length === 0) return null;
+  const conflicts = nearby.map(r => `"${r.text}"`).join(', ');
+  return `Note: you have ${nearby.length} reminder${nearby.length > 1 ? 's' : ''} within 30 min: ${conflicts}`;
 }

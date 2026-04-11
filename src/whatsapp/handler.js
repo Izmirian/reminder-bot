@@ -34,7 +34,8 @@ import { getConversationalResponse } from '../conversation.js';
 import {
   handleListIntent, handleContactIntent, handleJournalIntent,
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
-  buildDashboard,
+  buildDashboard, handleProjectIntent, handlePinIntent, handleFollowupIntent,
+  handleResearchIntent, handleEmailIntent, handleUndo, checkConflicts,
 } from '../assistant.js';
 
 // Track state
@@ -230,7 +231,7 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       if (cmd === 'clear_today') return handleClearToday(from);
       if (cmd === 'pause') return handlePause(from);
       if (cmd === 'resume') return handleResume(from);
-      if (cmd === 'undo') return handleUndo(from);
+      if (cmd === 'undo') return handleUndoCommand(from);
       if (cmd === 'summary') return handleWeekly(from);
       if (cmd === 'dashboard') {
         const settings2 = await getSettings(from);
@@ -364,6 +365,26 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
     if (aiResult.intent === 'expense') return sendTextMessage(from, await handleExpenseIntent(from, aiResult));
     if (aiResult.intent === 'timer') return sendTextMessage(from, handleTimerIntent(from, aiResult, (msg) => sendTextMessage(from, msg)));
     if (aiResult.intent === 'summarize') return sendTextMessage(from, await handleSummarizeIntent(aiResult.url, from));
+    if (aiResult.intent === 'project') {
+      const result = await handleProjectIntent(from, aiResult, settings.timezone);
+      if (result?.needsTime) {
+        // Store for pending time input
+        pendingPhotos.set(from, { text: result.taskText, projectId: result.projectId });
+        return sendTextMessage(from, `Adding "${result.taskText}" to project. When should I remind you?`);
+      }
+      return sendTextMessage(from, result);
+    }
+    if (aiResult.intent === 'pin') return sendTextMessage(from, await handlePinIntent(from, aiResult));
+    if (aiResult.intent === 'followup') return sendTextMessage(from, await handleFollowupIntent(from, aiResult));
+    if (aiResult.intent === 'research') return sendTextMessage(from, await handleResearchIntent(aiResult));
+    if (aiResult.intent === 'email') {
+      const draft = handleEmailIntent(aiResult);
+      try {
+        const { mcp__05bab599_3748_46cb_9ee6_328de67583a2__gmail_create_draft: createDraft } = await import('../assistant.js');
+      } catch {}
+      // For now, format the draft and show it
+      return sendTextMessage(from, `*Email Draft*\nTo: ${draft.to}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_Send this from your email app._`);
+    }
 
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {
@@ -401,12 +422,17 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
 
 }
 
-async function handleUndo(from) {
+async function handleUndoCommand(from) {
+  // Try universal undo first (pins, follow-ups, projects)
+  const { handleUndo: universalUndo } = await import('../assistant.js');
+  const result = await universalUndo(from);
+  if (result !== 'Nothing to undo.') return sendTextMessage(from, result);
+  // Fall back to reminder undo
   const last = await getLastDeactivated(from);
   if (!last) return sendTextMessage(from, 'Nothing to undo.');
   await reactivateReminder(last.id);
   scheduleReminder({ ...last, active: 1 });
-  return sendTextMessage(from, `↩️ Restored: "${last.text}"`);
+  return sendTextMessage(from, `Restored: "${last.text}"`);
 }
 
 async function handleRepeat(from) {
@@ -463,8 +489,12 @@ async function saveAndConfirm(from, parsed, settings) {
   const priorityLabel = parsed.priority === 'urgent' ? '\nURGENT' : parsed.priority === 'low' ? '\nLow priority' : '';
   const sharedLabel = parsed.sharedWith?.length ? `\nShared with ${parsed.sharedWith.length} recipient${parsed.sharedWith.length === 1 ? '' : 's'}` : '';
 
+  // Check for conflicts
+  const conflict = await checkConflicts(from, parsed.remindAt.toISOString());
+  const conflictLabel = conflict ? `\n${conflict}` : '';
+
   const apiResult = await sendTextMessage(from,
-    `✅ Reminder set! ${catEmoji}\n\n📝 *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}${priorityLabel}${sharedLabel}`
+    `✅ Reminder set! ${catEmoji}\n\n📝 *${parsed.text}*\n⏰ ${timeStr} (in ${relTime})${recurLabel}${priorityLabel}${sharedLabel}${conflictLabel}`
   );
   // Track message ID for reply-to feature
   const wamid = apiResult?.messages?.[0]?.id;

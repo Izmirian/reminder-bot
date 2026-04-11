@@ -269,6 +269,121 @@ export async function loadAllReminders() {
  * Schedule daily digest cron jobs for all users who have it enabled.
  */
 export function setupDailyDigest() {
+  // Idle check-in — every 12 hours, check for users who haven't messaged in 2+ days
+  cron.schedule('0 */12 * * *', async () => {
+    if (!botInstance) return;
+    try {
+      const { getLastMessageTime } = await import('./db.js');
+      const allReminders = await getAllActiveReminders();
+      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      for (const chatId of chatIds) {
+        const lastMsg = await getLastMessageTime(chatId);
+        if (!lastMsg) continue;
+        const hoursSince = (Date.now() - new Date(lastMsg).getTime()) / 3600000;
+        if (hoursSince >= 48 && hoursSince < 60) { // Between 2-2.5 days
+          const active = await getActiveReminders(chatId);
+          if (active.length > 0) {
+            botInstance.sendMessage(chatId, `Hey! You have *${active.length}* pending reminder${active.length > 1 ? 's' : ''}. Need anything?`, { parse_mode: 'Markdown' }).catch(() => {});
+          }
+        }
+      }
+    } catch (err) { console.error('[Idle Check]', err.message); }
+  });
+
+  // Follow-up check — every 6 hours, notify about due follow-ups
+  cron.schedule('0 */6 * * *', async () => {
+    if (!botInstance) return;
+    try {
+      const { getDueFollowups } = await import('./db.js');
+      const allReminders = await getAllActiveReminders();
+      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      for (const chatId of chatIds) {
+        const due = await getDueFollowups(chatId);
+        for (const f of due) {
+          botInstance.sendMessage(chatId, `*Follow-up due:* ${f.person} — ${f.subject}\nSay "followup ${f.id} done" when resolved.`, { parse_mode: 'Markdown' }).catch(() => {});
+        }
+      }
+    } catch (err) { console.error('[Follow-up Check]', err.message); }
+  });
+
+  // End-of-day recap — 9pm daily
+  cron.schedule('0 21 * * 1-6', async () => { // Mon-Sat (Sunday has weekly summary)
+    if (!botInstance) return;
+    try {
+      const allReminders = await getAllActiveReminders();
+      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      for (const chatId of chatIds) {
+        const settings = await getSettings(chatId);
+        if (!settings.daily_digest) continue;
+        const active = await getActiveReminders(chatId);
+        const { getExpenseSummary } = await import('./db.js');
+        const todaySpend = await getExpenseSummary(chatId, 1);
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toLocaleDateString('en-CA', { timeZone: settings.timezone });
+        const { getTodaysReminders } = await import('./db.js');
+        const tomorrowRems = await getTodaysReminders(chatId, tomorrowStr);
+
+        let msg = '*End of Day*\n';
+        if (todaySpend.count > 0) msg += `\nSpent today: *${todaySpend.total.toFixed(2)}* (${todaySpend.count} transactions)`;
+        msg += `\nPending reminders: *${active.length}*`;
+        if (tomorrowRems.length > 0) {
+          msg += `\n\n*Tomorrow (${tomorrowRems.length}):*`;
+          for (const r of tomorrowRems) {
+            const time = new Date(r.remind_at).toLocaleTimeString('en-US', { timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true });
+            msg += `\n  ${time} — ${r.text}`;
+          }
+        } else {
+          msg += '\n\nNothing scheduled for tomorrow.';
+        }
+        msg += '\n\nGood night!';
+        botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(() => {});
+      }
+    } catch (err) { console.error('[EOD Recap]', err.message); }
+  });
+
+  // Week planning — Sunday 7pm
+  cron.schedule('0 19 * * 0', async () => {
+    if (!botInstance) return;
+    try {
+      const allReminders = await getAllActiveReminders();
+      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      for (const chatId of chatIds) {
+        const settings = await getSettings(chatId);
+        if (!settings.daily_digest) continue;
+        const active = await getActiveReminders(chatId);
+        const { getExpenseSummary, getPendingFollowups } = await import('./db.js');
+        const weekSpend = await getExpenseSummary(chatId, 7);
+        const followups = await getPendingFollowups(chatId);
+
+        // Group reminders by day
+        const days = {};
+        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        for (const r of active) {
+          const d = new Date(r.remind_at);
+          const key = d.toLocaleDateString('en-CA', { timeZone: settings.timezone });
+          if (!days[key]) days[key] = [];
+          days[key].push(r);
+        }
+
+        let msg = '*Week Ahead*\n';
+        const sortedDays = Object.keys(days).sort().slice(0, 7);
+        for (const day of sortedDays) {
+          const d = new Date(day);
+          msg += `\n*${dayNames[d.getDay()]}, ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}:*`;
+          for (const r of days[day]) {
+            const time = new Date(r.remind_at).toLocaleTimeString('en-US', { timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true });
+            msg += `\n  ${time} — ${r.text}`;
+          }
+        }
+        if (weekSpend.count > 0) msg += `\n\nLast week spending: *${weekSpend.total.toFixed(2)}*`;
+        if (followups.length > 0) msg += `\n\nPending follow-ups: *${followups.length}*`;
+        msg += '\n\nHave a great week!';
+        botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(() => {});
+      }
+    } catch (err) { console.error('[Week Planning]', err.message); }
+  });
+
   // Daily cleanup at 3am — remove stale data
   cron.schedule('0 3 * * *', async () => {
     try {

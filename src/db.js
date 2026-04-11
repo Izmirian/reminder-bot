@@ -179,6 +179,56 @@ async function initPostgres() {
   // Index for fast lookups
   try { await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id ON chat_history(chat_id, created_at DESC)`); } catch {}
 
+  // Projects table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Pinned messages
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pins (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      source TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Follow-ups (people you're waiting on)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS followups (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      person TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      follow_up_at TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Last action log (for universal undo)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS action_log (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      action_data JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Add project_id to reminders
+  try { await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS project_id INTEGER`); } catch {}
+
   // Migrations
   try {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
@@ -822,4 +872,95 @@ export async function getExpenseSummary(chatId, daysBack = 7) {
     [chatId, daysBack]
   );
   return { total: Number(row?.total || 0), count: Number(row?.count || 0) };
+}
+
+// --- Projects ---
+
+export async function createProject(chatId, name, description) {
+  return insert('INSERT INTO projects (chat_id, name, description) VALUES (?, ?, ?)', [chatId, name, description || null]);
+}
+
+export async function getProjects(chatId) {
+  return (await query('SELECT * FROM projects WHERE chat_id = ? AND active = 1 ORDER BY created_at DESC', [chatId])).rows;
+}
+
+export async function getProject(chatId, name) {
+  return queryOne('SELECT * FROM projects WHERE chat_id = ? AND LOWER(name) = LOWER(?) AND active = 1', [chatId, name]);
+}
+
+export async function assignReminderToProject(reminderId, projectId) {
+  await run('UPDATE reminders SET project_id = ? WHERE id = ?', [projectId, reminderId]);
+}
+
+export async function getProjectReminders(chatId, projectId) {
+  return (await query('SELECT * FROM reminders WHERE chat_id = ? AND project_id = ? AND active = 1 ORDER BY remind_at ASC', [chatId, projectId])).rows;
+}
+
+export async function archiveProject(chatId, name) {
+  await run('UPDATE projects SET active = 0 WHERE chat_id = ? AND LOWER(name) = LOWER(?)', [chatId, name]);
+}
+
+// --- Pins ---
+
+export async function addPin(chatId, content, source) {
+  return insert('INSERT INTO pins (chat_id, content, source) VALUES (?, ?, ?)', [chatId, content, source || null]);
+}
+
+export async function getPins(chatId) {
+  return (await query('SELECT * FROM pins WHERE chat_id = ? ORDER BY created_at DESC LIMIT 20', [chatId])).rows;
+}
+
+export async function deletePin(chatId, id) {
+  await run('DELETE FROM pins WHERE chat_id = ? AND id = ?', [chatId, id]);
+}
+
+// --- Follow-ups ---
+
+export async function createFollowup(chatId, person, subject, followUpAt) {
+  return insert('INSERT INTO followups (chat_id, person, subject, follow_up_at) VALUES (?, ?, ?, ?)', [chatId, person, subject, followUpAt]);
+}
+
+export async function getPendingFollowups(chatId) {
+  return (await query("SELECT * FROM followups WHERE chat_id = ? AND status = 'pending' ORDER BY follow_up_at ASC", [chatId])).rows;
+}
+
+export async function getDueFollowups(chatId) {
+  return (await query("SELECT * FROM followups WHERE chat_id = ? AND status = 'pending' AND follow_up_at <= NOW()", [chatId])).rows;
+}
+
+export async function completeFollowup(chatId, id) {
+  await run("UPDATE followups SET status = 'done' WHERE chat_id = ? AND id = ?", [chatId, id]);
+}
+
+// --- Action Log (universal undo) ---
+
+export async function logAction(chatId, actionType, actionData) {
+  await insert('INSERT INTO action_log (chat_id, action_type, action_data) VALUES (?, ?, ?)', [chatId, actionType, JSON.stringify(actionData)]);
+  // Keep only last 20 actions per chat
+  await run('DELETE FROM action_log WHERE chat_id = ? AND id NOT IN (SELECT id FROM action_log WHERE chat_id = ? ORDER BY created_at DESC LIMIT 20)', [chatId, chatId]);
+}
+
+export async function getLastAction(chatId) {
+  return queryOne('SELECT * FROM action_log WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1', [chatId]);
+}
+
+export async function deleteLastAction(chatId) {
+  const last = await getLastAction(chatId);
+  if (last) await run('DELETE FROM action_log WHERE id = ?', [last.id]);
+  return last;
+}
+
+// --- Conflict detection ---
+
+export async function getRemindersNear(chatId, time, windowMinutes = 30) {
+  const before = new Date(new Date(time).getTime() - windowMinutes * 60000).toISOString();
+  const after = new Date(new Date(time).getTime() + windowMinutes * 60000).toISOString();
+  return (await query('SELECT * FROM reminders WHERE chat_id = ? AND active = 1 AND remind_at >= ? AND remind_at <= ?', [chatId, before, after])).rows;
+}
+
+// --- Last message timestamp (for idle check-in) ---
+
+export async function getLastMessageTime(chatId) {
+  const row = await queryOne('SELECT created_at FROM chat_history WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1', [chatId]);
+  return row?.created_at || null;
 }
