@@ -4,14 +4,6 @@
  */
 import 'dotenv/config';
 
-// Validate required environment variables (runs before bot imports)
-const required = ['DATABASE_URL', 'TELEGRAM_BOT_TOKEN', 'ANTHROPIC_API_KEY', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'];
-const missing = required.filter(k => !process.env[k]);
-if (missing.length > 0) {
-  console.error(`FATAL: Missing env vars: ${missing.join(', ')}`);
-  process.exit(1);
-}
-
 // Prevent process crashes from unhandled errors
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
@@ -20,9 +12,18 @@ process.on('unhandledRejection', (reason) => {
   console.error('[FATAL] Unhandled rejection:', reason);
 });
 
-// Start bots (dynamic import so env validation runs first)
-await import('./src/index.js');
-await import('./src/whatsapp/index.js');
+// Start Telegram bot
+import './src/index.js';
+
+// Start WhatsApp bot (webhook server)
+import './src/whatsapp/index.js';
+
+// Warn about missing env vars (after imports so app starts even if some are missing)
+const recommended = ['DATABASE_URL', 'TELEGRAM_BOT_TOKEN', 'ANTHROPIC_API_KEY', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'];
+const missing = recommended.filter(k => !process.env[k]);
+if (missing.length > 0) {
+  console.warn(`[Startup] Missing env vars: ${missing.join(', ')} — some features may not work`);
+}
 
 // Graceful shutdown — Railway sends SIGTERM before killing
 async function shutdown(signal) {
