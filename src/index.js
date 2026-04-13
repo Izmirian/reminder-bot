@@ -522,6 +522,9 @@ bot.on('message', async (msg) => {
 
   if (aiResult) {
     if (aiResult.intent === 'chat') {
+      if (aiResult.autoSave?.date && aiResult.autoSave?.event) {
+        try { const { addPin } = await import('./db.js'); await addPin(String(chatId), `${aiResult.autoSave.event}: ${aiResult.autoSave.date}`); } catch {}
+      }
       bot.sendMessage(chatId, aiResult.reply || "Hey! 👋 Need to set a reminder?");
       return;
     }

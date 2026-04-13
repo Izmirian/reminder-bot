@@ -225,6 +225,13 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
 
   if (aiResult) {
     if (aiResult.intent === 'chat') {
+      // Auto-save important dates mentioned in conversation
+      if (aiResult.autoSave?.date && aiResult.autoSave?.event) {
+        try {
+          const { addPin } = await import('../db.js');
+          await addPin(from, `${aiResult.autoSave.event}: ${aiResult.autoSave.date}`);
+        } catch {}
+      }
       return sendTextMessage(from, aiResult.reply || "Hey! 👋 Need to set a reminder?");
     }
 
@@ -813,6 +820,21 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
 
     // Check if user wants to analyze/read the image
     const analyzeKeywords = /analyz|summariz|read this|what is this|what does|extract|report|review|explain|translate|describe|tell me about|check this|look at/i;
+    const receiptKeywords = /receipt|bill|invoice|scan receipt|log this|expense|how much/i;
+    // Receipt scanning — auto-log expense from receipt photo
+    if (caption && receiptKeywords.test(caption) && imageBuffer) {
+      const { scanReceipt } = await import('../analyze.js');
+      const receipt = await scanReceipt(imageBuffer, mimeType);
+      if (receipt && receipt.amount) {
+        const { addExpense } = await import('../db.js');
+        await addExpense(from, receipt.amount, receipt.description, receipt.category, receipt.currency || 'JOD');
+        return sendTextMessage(from, `Receipt logged: *${receipt.amount.toFixed(2)} ${receipt.currency || 'JD'}* — ${receipt.description || 'expense'} (${receipt.category || 'other'})`);
+      }
+      // Fallback to regular analysis if not a receipt
+      const { analyzeImage } = await import('../analyze.js');
+      return sendTextMessage(from, await analyzeImage(imageBuffer, mimeType, caption));
+    }
+
     if (caption && analyzeKeywords.test(caption) && imageBuffer) {
       const { analyzeImage } = await import('../analyze.js');
       const result = await analyzeImage(imageBuffer, mimeType, caption);

@@ -78,6 +78,7 @@ Classify the message into one of these intents and return a JSON object:
      - "call john at 3pm about the project deadline" → text="call john", notes="about the project deadline"
      - "buy groceries at 5pm milk eggs bread" → text="buy groceries", notes="milk, eggs, bread"
    - If additional sentences after the reminder task don't include a new time, they're probably notes, not separate reminders.
+   - **Daily standup:** If the user lists multiple tasks for today ("today I need to finish report, call Sarah, gym at 6"), create a SEPARATE reminder for each task. Tasks with specific times get that time. Tasks without times → ask for time only for those specific tasks, still create the ones that have times.
    - IMPORTANT: If the user provides ONLY a day/date (e.g., "tomorrow", "Monday", "next week", "this weekend") WITHOUT a specific time or time-of-day phrase (morning, afternoon, evening, tonight, noon, etc.), return needsInfo asking what time. Do NOT guess or default to 9am. "Tomorrow" alone is NOT enough — ask "What time tomorrow?"
    - If you can't determine the time, return: { "intent": "reminder", "needsInfo": "short clarifying question" }
 
@@ -96,6 +97,7 @@ Classify the message into one of these intents and return a JSON object:
    - **Timezone**: "what time in New York?" → "*It's 4:53 PM in New York* (7 hours behind Amman)"
    - **Translation**: "translate 'where is the hotel' to Arabic" → "*أين الفندق*"
    - **Multi-language**: If the user writes in Arabic, respond in Arabic. Match their language naturally.
+   - **Auto-date extraction**: If the user mentions an important date in conversation (wedding, birthday, anniversary, deadline, exam, trip, event) with a specific date, include "autoSave": { "event": "description", "date": "YYYY-MM-DD" } in the response alongside the reply. Example: "wedding is June 15" → reply normally AND include autoSave.
 
 3. **"command"** — The user wants a general bot action (NOT cancel/edit/reschedule — those are "action").
    Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|dashboard|timezone|digest|location|connect_calendar|disconnect_calendar|help|menu", "args": "optional" }
@@ -163,11 +165,15 @@ Classify the message into one of these intents and return a JSON object:
    - "forget that" or "forget #3" → action=forget, id=3
 
 11. **"expense"** — The user is logging spending or asking about expenses.
-   Return: { "intent": "expense", "action": "add|summary|list", "amount": number or null, "description": "text or null", "category": "food|transport|shopping|bills|entertainment|other|null", "period": "today|week|month|null" }
-   - "spent 50 on lunch" → action=add, amount=50, description="lunch", category="food"
+   Return: { "intent": "expense", "action": "add|summary|list|recurring", "amount": number or null, "description": "text or null", "category": "food|transport|shopping|bills|entertainment|other|null", "currency": "JOD|USD|EUR|GBP|null", "period": "today|week|month|null", "recurring": false, "cronDay": number or null }
+   - "spent 50 on lunch" → action=add, amount=50, description="lunch", category="food", currency=null (defaults to JOD)
+   - "spent 30 USD on Amazon" → action=add, amount=30, description="Amazon", category="shopping", currency="USD"
    - "paid 200 for electricity" → action=add, amount=200, description="electricity", category="bills"
+   - "rent is 500 every 1st" → action=recurring, amount=500, description="rent", category="bills", cronDay=1
+   - "internet is 25 every 15th" → action=recurring, amount=25, description="internet", category="bills", cronDay=15
    - "how much did I spend this week?" → action=summary, period="week"
    - "show my expenses" → action=list, period="week"
+   - Default currency is JOD if not specified. Only set currency if user explicitly mentions USD, EUR, etc.
 
 12. **"timer"** — The user wants a pomodoro/focus timer.
    Return: { "intent": "timer", "action": "start|stop|status", "minutes": number or null, "label": "text or null" }
@@ -189,11 +195,14 @@ Classify the message into one of these intents and return a JSON object:
    - "my projects" → action=list
    - "archive project Wedding" → action=archive, name="Wedding"
 
-15. **"pin"** — The user wants to pin/save important info.
+15. **"pin"** — The user wants to pin/save important info or jot down a quick note.
    Return: { "intent": "pin", "action": "save|list|remove", "content": "text to pin or null", "id": number or null }
    - "pin this: meeting moved to Thursday" → action=save, content="meeting moved to Thursday"
    - "pin: John's new number is 079..." → action=save, content="John's new number is 079..."
-   - "show my pins" or "pinned" → action=list
+   - "note: meeting moved to 3pm" → action=save, content="meeting moved to 3pm"
+   - "jot down: call supplier about order" → action=save, content="call supplier about order"
+   - "quick note: parking spot B42" → action=save, content="parking spot B42"
+   - "show my pins" or "pinned" or "show my notes" → action=list
    - "unpin 3" → action=remove, id=3
 
 16. **"followup"** — The user wants to track something they're waiting on from someone.

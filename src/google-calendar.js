@@ -229,6 +229,33 @@ export async function syncFromCalendar(chatId, scheduleReminderFn) {
 /**
  * Check if Google Calendar integration is configured.
  */
+/**
+ * Check for calendar events near a specific time (for conflict detection).
+ */
+export async function getEventsNear(chatId, time, windowMinutes = 60) {
+  const tokens = await getGoogleTokens(chatId);
+  if (!tokens) return [];
+
+  const client = getOAuth2Client(tokens);
+  const calendar = google.calendar({ version: 'v3', auth: client });
+
+  const center = new Date(time);
+  const timeMin = new Date(center.getTime() - windowMinutes * 60000).toISOString();
+  const timeMax = new Date(center.getTime() + windowMinutes * 60000).toISOString();
+
+  try {
+    const response = await calendar.events.list({
+      calendarId: 'primary', timeMin, timeMax, singleEvents: true, maxResults: 5,
+    });
+    return (response.data.items || []).map(e => ({
+      summary: e.summary, start: e.start?.dateTime, end: e.end?.dateTime,
+    }));
+  } catch (err) {
+    console.error('[GCal] getEventsNear failed:', err.message);
+    return [];
+  }
+}
+
 export function isConfigured() {
   return !!(CLIENT_ID && CLIENT_SECRET);
 }

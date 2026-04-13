@@ -87,3 +87,38 @@ export async function analyzePdfBuffer(pdfBuffer, prompt) {
     return `Failed to analyze PDF: ${err.message}`;
   }
 }
+
+/**
+ * Scan a receipt image and extract expense data.
+ * Returns { amount, currency, description, category } or null.
+ */
+export async function scanReceipt(imageBuffer, mimeType) {
+  try {
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const client = new Anthropic();
+
+    const base64 = imageBuffer.toString('base64');
+    const mediaType = mimeType.includes('png') ? 'image/png' : 'image/jpeg';
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+          { type: 'text', text: 'Extract expense info from this receipt/bill. Return ONLY valid JSON: { "amount": number, "currency": "JOD" or "USD" etc, "description": "store or vendor name", "category": "food|transport|shopping|bills|entertainment|other" }. If not a receipt, return { "error": "not a receipt" }.' },
+        ],
+      }],
+    });
+
+    const text = response.content[0]?.text?.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    if (!text) return null;
+    const data = JSON.parse(text);
+    if (data.error) return null;
+    return data;
+  } catch (err) {
+    console.error('[Receipt Scan] Error:', err.message);
+    return null;
+  }
+}

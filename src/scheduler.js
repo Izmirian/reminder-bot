@@ -395,6 +395,21 @@ export function setupDailyDigest() {
     } catch (err) { console.error('[Week Planning]', err.message); }
   });
 
+  // Auto-log recurring expenses at midnight
+  cron.schedule('0 0 * * *', async () => {
+    try {
+      const { getActiveRecurringExpenses, addExpense } = await import('./db.js');
+      const today = new Date().getDate();
+      const recurring = await getActiveRecurringExpenses();
+      for (const r of recurring) {
+        if (r.cron_day === today) {
+          await addExpense(r.chat_id, r.amount, r.description, r.category, r.currency);
+          console.log(`[Recurring] Auto-logged ${r.amount} ${r.currency} — ${r.description} for ${r.chat_id}`);
+        }
+      }
+    } catch (err) { console.error('[Recurring Expense]', err.message); }
+  });
+
   // Daily cleanup at 3am — remove stale data
   cron.schedule('0 3 * * *', async () => {
     try {
@@ -541,6 +556,17 @@ export function setupDailyDigest() {
         const { getExpenseSummary } = await import('./db.js');
         const recent = await getExpenseSummary(chatId, 1);
         if (recent.count > 0) message += `\n\nLast 24h spending: *${recent.total.toFixed(2)}* (${recent.count} transactions)`;
+        // Weekly insight — compare this week vs last week
+        const thisWeek = await getExpenseSummary(chatId, 7);
+        const lastWeek = await getExpenseSummary(chatId, 14);
+        if (thisWeek.total > 0 && lastWeek.total > thisWeek.total) {
+          const lastWeekOnly = lastWeek.total - thisWeek.total;
+          if (lastWeekOnly > 0) {
+            const pctChange = Math.round(((thisWeek.total - lastWeekOnly) / lastWeekOnly) * 100);
+            if (pctChange > 20) message += `\n⬆️ Spending up ${pctChange}% vs last week`;
+            else if (pctChange < -20) message += `\n⬇️ Spending down ${Math.abs(pctChange)}% vs last week`;
+          }
+        }
       } catch {}
 
       // Upcoming birthdays

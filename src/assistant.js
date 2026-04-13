@@ -190,20 +190,44 @@ export async function handleMemoryIntent(chatId, aiResult) {
 /**
  * Handle an "expense" intent.
  */
+const currencySymbols = { JOD: 'JD', USD: '$', EUR: '€', GBP: '£' };
+function fmtAmount(amount, currency) {
+  const sym = currencySymbols[currency] || currency || 'JD';
+  return `${Number(amount).toFixed(2)} ${sym}`;
+}
+
 export async function handleExpenseIntent(chatId, aiResult) {
-  const { action, amount, description, category, period } = aiResult;
+  const { action, amount, description, category, period, currency, recurring, cronDay } = aiResult;
 
   if (action === 'add' && amount) {
-    await addExpense(chatId, Number(amount), description, category);
+    await addExpense(chatId, Number(amount), description, category, currency || 'JOD');
     const catLabel = category ? ` (${category})` : '';
-    return `Logged *${amount}*${catLabel}${description ? ` — ${description}` : ''}`;
+    return `Logged *${fmtAmount(amount, currency)}*${catLabel}${description ? ` — ${description}` : ''}`;
+  }
+
+  if (action === 'recurring' && amount && cronDay) {
+    const { createRecurringExpense } = await import('./db.js');
+    await createRecurringExpense(chatId, Number(amount), description, category, currency || 'JOD', cronDay);
+    return `Recurring expense set: *${fmtAmount(amount, currency)}* — ${description || 'expense'} on the *${cronDay}${cronDay === 1 ? 'st' : cronDay === 2 ? 'nd' : cronDay === 3 ? 'rd' : 'th'}* of each month`;
   }
 
   if (action === 'summary') {
     const days = period === 'today' ? 1 : period === 'month' ? 30 : 7;
     const summary = await getExpenseSummary(chatId, days);
     const label = period === 'today' ? 'today' : period === 'month' ? 'this month' : 'this week';
-    return `*Spending ${label}*\nTotal: *${summary.total.toFixed(2)}*\nTransactions: ${summary.count}`;
+    let msg = `*Spending ${label}*\nTotal: *${fmtAmount(summary.total, 'JOD')}* (${summary.count} transactions)`;
+    // Category breakdown for week/month
+    if (days >= 7) {
+      const { getExpensesByCategory } = await import('./db.js');
+      const cats = await getExpensesByCategory(chatId, days);
+      if (cats.length > 1) {
+        msg += '\n';
+        for (const c of cats.slice(0, 5)) {
+          msg += `\n${c.category || 'other'}: ${fmtAmount(c.total, c.currency)}`;
+        }
+      }
+    }
+    return msg;
   }
 
   if (action === 'list') {
@@ -215,9 +239,9 @@ export async function handleExpenseIntent(chatId, aiResult) {
     for (const e of expenses) {
       const date = new Date(e.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       const catLabel = e.category ? ` (${e.category})` : '';
-      msg += `\n${date} — *${e.amount}*${catLabel} ${e.description || ''}`;
+      msg += `\n${date} — *${fmtAmount(e.amount, e.currency)}*${catLabel} ${e.description || ''}`;
     }
-    msg += `\n\n*Total: ${summary.total.toFixed(2)}*`;
+    msg += `\n\n*Total: ${fmtAmount(summary.total, 'JOD')}*`;
     return msg;
   }
 
@@ -640,8 +664,29 @@ export async function handleUndo(chatId) {
  * Check for conflicts near a given time.
  */
 export async function checkConflicts(chatId, remindAt) {
+  const parts = [];
+
+  // Check reminders
   const nearby = await getRemindersNear(chatId, remindAt, 30);
-  if (nearby.length === 0) return null;
-  const conflicts = nearby.map(r => `"${r.text}"`).join(', ');
-  return `Note: you have ${nearby.length} reminder${nearby.length > 1 ? 's' : ''} within 30 min: ${conflicts}`;
+  if (nearby.length > 0) {
+    parts.push(`${nearby.length} reminder${nearby.length > 1 ? 's' : ''}: ${nearby.map(r => `"${r.text}"`).join(', ')}`);
+  }
+
+  // Check Google Calendar events
+  try {
+    const { getEventsNear, isConfigured } = await import('./google-calendar.js');
+    if (isConfigured()) {
+      const events = await getEventsNear(chatId, remindAt, 60);
+      if (events.length > 0) {
+        const eventNames = events.map(e => {
+          const time = e.start ? new Date(e.start).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : '';
+          return `"${e.summary}" at ${time}`;
+        }).join(', ');
+        parts.push(`calendar: ${eventNames}`);
+      }
+    }
+  } catch {}
+
+  if (parts.length === 0) return null;
+  return `Note: ${parts.join(' | ')}`;
 }

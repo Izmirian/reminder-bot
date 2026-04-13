@@ -252,6 +252,24 @@ async function initPostgres() {
   // Add project_id to reminders
   try { await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS project_id INTEGER`); } catch (e) { console.error('[DB] Migration:', e.message); }
 
+  // Recurring expenses table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS recurring_expenses (
+      id SERIAL PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      amount REAL NOT NULL,
+      description TEXT,
+      category TEXT,
+      currency TEXT DEFAULT 'JOD',
+      cron_day INTEGER NOT NULL,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+
+  // Add currency to expenses
+  try { await pool.query(`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'JOD'`); } catch (e) { console.error('[DB] Migration:', e.message); }
+
   // Migrations
   try {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
@@ -903,8 +921,35 @@ export async function deleteMemory(chatId, id) {
 
 // --- Expenses ---
 
-export async function addExpense(chatId, amount, description, category) {
-  return insert('INSERT INTO expenses (chat_id, amount, description, category) VALUES (?, ?, ?, ?)', [chatId, amount, description || null, category || null]);
+export async function addExpense(chatId, amount, description, category, currency) {
+  return insert('INSERT INTO expenses (chat_id, amount, description, category, currency) VALUES (?, ?, ?, ?, ?)',
+    [chatId, amount, description || null, category || null, currency || 'JOD']);
+}
+
+// Recurring expenses
+export async function createRecurringExpense(chatId, amount, description, category, currency, cronDay) {
+  return insert('INSERT INTO recurring_expenses (chat_id, amount, description, category, currency, cron_day) VALUES (?, ?, ?, ?, ?, ?)',
+    [chatId, amount, description || null, category || null, currency || 'JOD', cronDay]);
+}
+
+export async function getActiveRecurringExpenses() {
+  return (await query('SELECT * FROM recurring_expenses WHERE active = 1')).rows;
+}
+
+export async function getUserRecurringExpenses(chatId) {
+  return (await query('SELECT * FROM recurring_expenses WHERE chat_id = ? AND active = 1 ORDER BY cron_day ASC', [chatId])).rows;
+}
+
+export async function deactivateRecurringExpense(chatId, id) {
+  await run('DELETE FROM recurring_expenses WHERE chat_id = ? AND id = ?', [chatId, id]);
+}
+
+// Expense summary by category (for weekly insights)
+export async function getExpensesByCategory(chatId, daysBack = 7) {
+  return (await query(
+    "SELECT category, currency, SUM(amount) as total, COUNT(*) as count FROM expenses WHERE chat_id = ? AND created_at > NOW() - INTERVAL '1 day' * ? GROUP BY category, currency ORDER BY total DESC",
+    [chatId, daysBack]
+  )).rows;
 }
 
 export async function getExpenses(chatId, daysBack = 7) {
