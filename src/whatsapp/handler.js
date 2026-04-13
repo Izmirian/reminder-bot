@@ -881,12 +881,39 @@ export async function handleDocumentMessage(from, waMediaId, caption, mimeType, 
     const isPdf = mimeType.includes('pdf');
     const isImage = mimeType.includes('image');
 
-    // Auto-analyze the document
+    // Check caption for reminder intent FIRST — "remind me to send this to X at Y"
+    if (caption) {
+      const settings = await getSettings(from);
+      const activeRems = await getActiveReminders(from);
+      const aiResult = await classifyIntent(caption, settings.timezone, new Date().toISOString(), activeRems, from);
+
+      if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+        const r = aiResult.reminders[0];
+        const id = await createReminderAndSchedule(from, {
+          text: r.text, remindAt: new Date(r.remindAt), cronExpr: r.cronExpr || null,
+          category: r.category || null, notes: r.notes || null, priority: r.priority || 'normal',
+        }, settings);
+        // Save document to DB and attach to reminder
+        const { saveDocument, attachMediaWithData } = await import('../db.js');
+        const docId = await saveDocument(from, filename, r.text, mimeType, docBuffer);
+        await attachMediaWithData(id, 'wa_image', mimeType, docBuffer);
+        const timeStr = formatTime(new Date(r.remindAt).toISOString(), settings.timezone);
+        const relTime = relativeTime(new Date(r.remindAt));
+        return sendTextMessage(from, `✅ *${r.text}*\n${timeStr} (in ${relTime})\nDocument: ${filename}`);
+      }
+
+      if (aiResult?.intent === 'reminder' && aiResult.needsInfo) {
+        // Store document as pending, ask for time
+        pendingPhotos.set(from, { buffer: docBuffer, mimeType, text: caption, filename });
+        return sendTextMessage(from, aiResult.needsInfo);
+      }
+    }
+
+    // No reminder intent — analyze the document
     if (isPdf) {
       await sendTextMessage(from, `Analyzing *${filename}*...`);
       const { analyzePdfBuffer } = await import('../analyze.js');
       const result = await analyzePdfBuffer(docBuffer, caption || null);
-      // Save to documents table
       const { saveDocument } = await import('../db.js');
       await saveDocument(from, filename, result.substring(0, 200), mimeType, docBuffer);
       return sendTextMessage(from, result);
