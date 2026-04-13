@@ -274,7 +274,7 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
     // Smart history: skip for simple commands, reduce for most messages
     const lowerMsg = userMessage.toLowerCase().trim();
     const isSimpleCommand = /^(list|menu|help|dashboard|overview|status|streaks|undo|digest|pause|resume|show my|pinned|my projects)/.test(lowerMsg);
-    const needsFullContext = /\b(what did (i|we|you)|follow.?up|earlier|before|last time|you said|you mentioned|we talked|we discussed|referring to)\b/i.test(lowerMsg);
+    const needsFullContext = /\b(what did (i|we|you)|follow.?up|earlier|before|last time|you said|you mentioned|we talked|we discussed|referring to|add it|set it|do it|make it|that one|the one|about that|from that)\b/i.test(lowerMsg);
 
     const historyLimit = isSimpleCommand ? 0 : needsFullContext ? 20 : 10;
     const history = (chatId && historyLimit > 0) ? await dbGetChatHistory(chatId, historyLimit) : [];
@@ -304,7 +304,23 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
     if (!text) return null;
 
     text = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-    const result = JSON.parse(text);
+    let result;
+    try {
+      result = JSON.parse(text);
+    } catch (parseErr) {
+      // If Haiku returned bad JSON, retry with Sonnet once
+      if (model !== 'claude-sonnet-4-20250514') {
+        console.warn(`[AI] Haiku JSON parse failed, retrying with Sonnet`);
+        const retryRes = await api.messages.create({ model: 'claude-sonnet-4-20250514', max_tokens: 800, temperature: 0.3, system: buildPrompt(activeReminders), messages });
+        let retryText = retryRes.content[0]?.text;
+        if (retryText) {
+          retryText = retryText.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+          result = JSON.parse(retryText);
+        } else { return null; }
+      } else {
+        throw parseErr;
+      }
+    }
 
     // Store in history for context (persisted to DB)
     if (chatId) {
