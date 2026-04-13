@@ -363,15 +363,7 @@ export async function buildDashboard(chatId, timezone) {
     msg += `\n\n*Timer:* ${timer.label} — ${remaining} min remaining`;
   }
 
-  // Settings summary
-  try {
-    const settings = await getSettings(chatId);
-    msg += '\n\n*Settings:*';
-    msg += `\nTimezone: ${settings.timezone}`;
-    if (settings.location) msg += ` | Location: ${settings.location}`;
-    msg += `\nDigest: ${settings.daily_digest ? `ON at ${settings.digest_time}` : 'OFF'}`;
-    msg += `\nCalendar: ${settings.google_tokens ? 'Connected' : 'Not connected'}`;
-  } catch (e) { /* dashboard section failed silently */ }
+  // Settings omitted from dashboard — say "show settings" to see them
 
   return msg;
 }
