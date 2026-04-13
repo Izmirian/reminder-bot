@@ -19,7 +19,7 @@ async function initPostgres() {
     ssl: process.env.DATABASE_URL?.includes('railway') ? { rejectUnauthorized: false } : false,
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    connectionTimeoutMillis: 10000,
     statement_timeout: 30000, // 30s max per query
   });
 
@@ -310,7 +310,22 @@ async function initSqlite() {
 
 // Initialize
 if (process.env.DATABASE_URL) {
-  await initPostgres();
+  // Retry DB connection up to 5 times with backoff
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      await initPostgres();
+      break;
+    } catch (err) {
+      console.error(`[DB] Connection attempt ${attempt}/5 failed:`, err.message);
+      if (attempt === 5) {
+        console.error('[DB] All connection attempts failed. Starting without DB — features will be limited.');
+      } else {
+        const delay = attempt * 3000; // 3s, 6s, 9s, 12s
+        console.log(`[DB] Retrying in ${delay / 1000}s...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
 } else {
   await initSqlite();
 }
