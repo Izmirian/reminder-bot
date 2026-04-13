@@ -737,6 +737,12 @@ bot.on('message', async (msg) => {
       bot.sendMessage(chatId, `*Email Draft*\nTo: ${draft.to}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_Send this from your email app._`, { parse_mode: 'Markdown' });
       return;
     }
+    if (aiResult.intent === 'github') {
+      bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message));
+      const { handleGithubQuery } = await import('./github.js');
+      bot.sendMessage(chatId, await handleGithubQuery(aiResult.query), { parse_mode: 'Markdown' });
+      return;
+    }
 
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {

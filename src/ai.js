@@ -226,6 +226,17 @@ Classify the message into one of these intents and return a JSON object:
    - "draft an email to John about the meeting" → to="John", subject="Meeting", body="key points about the meeting"
    - "email sarah@company.com: project update is ready" → to="sarah@company.com", subject="Project Update", body="The project update is ready"
 
+19. **"github"** — The user asks about their code project, repo, PRs, builds, deploys, or code files.
+   Return: { "intent": "github", "query": "the full user question" }
+   - "any open PRs?" → query="any open PRs"
+   - "show me recent commits" → query="recent commits"
+   - "what's the build status?" → query="build status"
+   - "read src/index.js" → query="read src/index.js"
+   - "search for handleAuth in the codebase" → query="search handleAuth"
+   - "what's in the project?" → query="project overview"
+   - "did the deploy succeed?" → query="deploy status"
+   - "list the src folder" → query="list src"
+
 Time-of-day phrases (these provide a specific time):
 - "morning" = 9:00 AM, "afternoon" = 2:00 PM, "evening" = 7:00 PM, "tonight" = 9:00 PM
 - "after lunch" = 1:00 PM, "after work" = 6:00 PM, "end of day" = 5:00 PM

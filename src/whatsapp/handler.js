@@ -412,6 +412,10 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
       const draft = handleEmailIntent(aiResult);
       return sendTextMessage(from, `*Email Draft*\nTo: ${draft.to}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_Send this from your email app._`);
     }
+    if (aiResult.intent === 'github') {
+      const { handleGithubQuery } = await import('../github.js');
+      return sendTextMessage(from, await handleGithubQuery(aiResult.query));
+    }
 
     if (aiResult.intent === 'reminder') {
       if (aiResult.needsInfo) {
