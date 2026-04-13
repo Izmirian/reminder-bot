@@ -151,14 +151,8 @@ export function createWebhookServer() {
   });
 
   // Health check
-  app.get('/', async (req, res) => {
-    try {
-      const { getSettings } = await import('./handler.js').catch(() => ({}));
-      // Simple check — if we got here, Express is running
-      res.json({ status: 'ok', service: 'WhatsApp Reminder Bot', uptime: Math.floor(process.uptime()) });
-    } catch (err) {
-      res.status(503).json({ status: 'error', error: err.message });
-    }
+  app.get('/', (req, res) => {
+    res.json({ status: 'ok', service: 'WhatsApp Reminder Bot', uptime: Math.floor(process.uptime()) });
   });
 
   return app;
