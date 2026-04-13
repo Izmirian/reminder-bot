@@ -122,9 +122,18 @@ export function scheduleReminder(reminder) {
       fireReminder(reminder);
       return;
     }
+    const MAX_TIMEOUT = 24 * 24 * 60 * 60 * 1000;
+    const safeDelay = Math.min(delay, MAX_TIMEOUT);
     const timeout = setTimeout(async () => {
-      try { await fireReminder(reminder); } catch (e) { console.error(`[WA Fire] Error:`, e.message); }
-    }, delay);
+      try {
+        if (safeDelay < delay) {
+          const { getReminder: getRem } = await import('../db.js');
+          const fresh = await getRem(reminder.id);
+          if (fresh && new Date(fresh.remind_at).getTime() > Date.now()) { scheduleReminder(fresh); return; }
+        }
+        await fireReminder(reminder);
+      } catch (e) { console.error(`[WA Fire] Error:`, e.message); }
+    }, safeDelay);
     activeJobs.set(reminder.id, { timeout });
   }
 }

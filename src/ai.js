@@ -285,6 +285,8 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
 
   try {
     // Smart history: skip for simple commands, reduce for most messages
+    // Cap message length to prevent excessive token usage
+    if (userMessage.length > 5000) userMessage = userMessage.substring(0, 5000);
     const lowerMsg = userMessage.toLowerCase().trim();
     const isSimpleCommand = /^(list|menu|help|dashboard|overview|status|streaks|undo|digest|pause|resume|show my|pinned|my projects)/.test(lowerMsg);
     const needsFullContext = /\b(what did (i|we|you)|follow.?up|earlier|before|last time|you said|you mentioned|we talked|we discussed|referring to|add it|set it|do it|make it|that one|the one|about that|from that)\b/i.test(lowerMsg);

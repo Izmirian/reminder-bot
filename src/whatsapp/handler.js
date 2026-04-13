@@ -390,7 +390,7 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
     }
     if (aiResult.intent === 'pin') return sendTextMessage(from, await handlePinIntent(from, aiResult));
     if (aiResult.intent === 'followup') return sendTextMessage(from, await handleFollowupIntent(from, aiResult));
-    if (aiResult.intent === 'research') return sendTextMessage(from, await handleResearchIntent(aiResult));
+    if (aiResult.intent === 'research') return sendTextMessage(from, await handleResearchIntent(aiResult, from));
     if (aiResult.intent === 'email') {
       const draft = handleEmailIntent(aiResult);
       return sendTextMessage(from, `*Email Draft*\nTo: ${draft.to}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_Send this from your email app._`);

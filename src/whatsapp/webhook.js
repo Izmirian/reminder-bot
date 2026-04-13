@@ -32,7 +32,8 @@ export function createWebhookServer() {
   // Verify Meta webhook signature
   function verifySignature(req) {
     const signature = req.headers['x-hub-signature-256'];
-    if (!signature || !process.env.META_APP_SECRET) return true; // Skip if no secret configured
+    if (!process.env.META_APP_SECRET) { console.warn('[Webhook] META_APP_SECRET not set — rejecting request'); return false; }
+    if (!signature) return false;
     try {
       const expected = 'sha256=' + crypto.createHmac('sha256', process.env.META_APP_SECRET)
         .update(req.rawBody)

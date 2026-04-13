@@ -16,6 +16,17 @@ import {
   getRemindersNear, createReminder,
 } from './db.js';
 
+// Rate limit expensive AI calls (summarize, research, receipt scan) — max 5/min per chat
+const expensiveCallTracker = new Map();
+function checkExpensiveRateLimit(chatId) {
+  const now = Date.now();
+  const tracker = expensiveCallTracker.get(chatId) || { count: 0, reset: now };
+  if (now - tracker.reset > 60000) { tracker.count = 0; tracker.reset = now; }
+  tracker.count++;
+  expensiveCallTracker.set(chatId, tracker);
+  return tracker.count <= 5;
+}
+
 // Active timers per chat
 const activeTimers = new Map(); // chatId -> { timeout, label, endsAt }
 
@@ -200,7 +211,9 @@ export async function handleExpenseIntent(chatId, aiResult) {
   const { action, amount, description, category, period, currency, recurring, cronDay } = aiResult;
 
   if (action === 'add' && amount) {
-    await addExpense(chatId, Number(amount), description, category, currency || 'JOD');
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) return 'Invalid amount. Try: "spent 50 on lunch"';
+    await addExpense(chatId, numAmount, description, category, currency || 'JOD');
     const catLabel = category ? ` (${category})` : '';
     return `Logged *${fmtAmount(amount, currency)}*${catLabel}${description ? ` — ${description}` : ''}`;
   }
@@ -420,6 +433,7 @@ export async function buildDashboard(chatId, timezone) {
  * Handle a "summarize" intent — fetch URL and summarize.
  */
 export async function handleSummarizeIntent(url, chatId) {
+  if (chatId && !checkExpensiveRateLimit(chatId)) return 'Too many requests. Try again in a minute.';
   try {
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ReminderBot/1.0)' },
@@ -581,7 +595,8 @@ export async function handleFollowupIntent(chatId, aiResult) {
 /**
  * Handle a "research" intent — multi-source web search.
  */
-export async function handleResearchIntent(aiResult) {
+export async function handleResearchIntent(aiResult, chatId) {
+  if (chatId && !checkExpensiveRateLimit(chatId)) return 'Too many requests. Try again in a minute.';
   const { query: searchQuery, type } = aiResult;
   try {
     // Use DuckDuckGo HTML (doesn't block bots like Google does)

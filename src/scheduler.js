@@ -214,9 +214,23 @@ export function scheduleReminder(reminder) {
       return;
     }
 
+    // Cap delay at 24 days to prevent Node.js setTimeout overflow (>2^31ms fires immediately)
+    // Reminders further out will be picked up by the missed-check cron when they become due
+    const MAX_TIMEOUT = 24 * 24 * 60 * 60 * 1000; // 24 days
+    const safeDelay = Math.min(delay, MAX_TIMEOUT);
     const timeout = setTimeout(async () => {
-      try { await fireReminder(reminder); } catch (e) { console.error(`[Fire] Error reminder ${reminder.id}:`, e.message); }
-    }, delay);
+      try {
+        if (safeDelay < delay) {
+          // Re-check if actually due now (was capped, might not be time yet)
+          const fresh = await getReminder(reminder.id);
+          if (fresh && new Date(fresh.remind_at).getTime() > Date.now()) {
+            scheduleReminder(fresh); // Reschedule for another 24-day window
+            return;
+          }
+        }
+        await fireReminder(reminder);
+      } catch (e) { console.error(`[Fire] Error reminder ${reminder.id}:`, e.message); }
+    }, safeDelay);
 
     activeJobs.set(reminder.id, { timeout });
   }

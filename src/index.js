@@ -720,7 +720,7 @@ bot.on('message', async (msg) => {
     }
     if (aiResult.intent === 'pin') { bot.sendMessage(chatId, await handlePinIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
     if (aiResult.intent === 'followup') { bot.sendMessage(chatId, await handleFollowupIntent(String(chatId), aiResult), { parse_mode: 'Markdown' }); return; }
-    if (aiResult.intent === 'research') { bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message)); bot.sendMessage(chatId, await handleResearchIntent(aiResult), { parse_mode: 'Markdown' }); return; }
+    if (aiResult.intent === 'research') { bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message)); bot.sendMessage(chatId, await handleResearchIntent(aiResult, String(chatId)), { parse_mode: 'Markdown' }); return; }
     if (aiResult.intent === 'email') {
       const draft = handleEmailIntent(aiResult);
       bot.sendMessage(chatId, `*Email Draft*\nTo: ${draft.to}\nSubject: ${draft.subject}\n\n${draft.body}\n\n_Send this from your email app._`, { parse_mode: 'Markdown' });
