@@ -277,7 +277,8 @@ export async function loadAllReminders() {
     } else {
       const remindAt = new Date(reminder.remind_at);
       if (remindAt <= new Date()) {
-        // Past due — fire immediately
+        // Past due — mark as fired first (prevents missed-check cron from double-firing)
+        await markReminderFired(reminder.id);
         fireReminder(reminder);
         pastDue++;
       } else {

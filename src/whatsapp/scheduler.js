@@ -183,6 +183,7 @@ export async function loadWhatsAppReminders() {
       scheduled++;
     } else {
       if (new Date(reminder.remind_at) <= new Date()) {
+        await markReminderFired(reminder.id);
         fireReminder(reminder);
         pastDue++;
       } else {

@@ -6,7 +6,7 @@
 let client = null;
 let aiAvailable = true;
 let lastFailure = 0;
-const COOLDOWN_MS = 60_000;
+const COOLDOWN_MS = 10_000; // 10s cooldown (was 60s — too aggressive)
 
 // Rate limiting — max 30 API calls per minute per chat, 200 total per minute
 const rateLimiter = { perChat: new Map(), totalCount: 0, lastReset: Date.now() };
@@ -356,8 +356,11 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
     return result;
   } catch (err) {
     console.error(`[AI] Classification failed (model=${model}):`, err.message);
-    aiAvailable = false;
-    lastFailure = Date.now();
+    // Only cooldown on real API errors, not JSON parse failures (already retried with Sonnet)
+    if (!(err instanceof SyntaxError)) {
+      aiAvailable = false;
+      lastFailure = Date.now();
+    }
     return null;
   }
 }

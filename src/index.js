@@ -86,6 +86,17 @@ bot.on('callback_query', async (query) => {
   const data = query.data;
   const chatId = query.message.chat.id;
 
+  // Verify ownership before any action
+  const idMatch = data.match(/:(\d+)/);
+  if (idMatch) {
+    const checkId = parseInt(idMatch[1], 10);
+    const checkRem = await getReminder(checkId);
+    if (checkRem && checkRem.chat_id !== String(chatId)) {
+      await bot.answerCallbackQuery(query.id, { text: 'Not your reminder.' });
+      return;
+    }
+  }
+
   if (data.startsWith('snooze:')) {
     const [, idStr, minsStr] = data.split(':');
     const reminderId = parseInt(idStr, 10);

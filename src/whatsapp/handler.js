@@ -80,7 +80,24 @@ function formatTime(isoStr, timezone) {
 
 // --- Main message handler ---
 
+// Per-user processing lock — prevents race conditions from concurrent messages
+const processingLock = new Set();
+
 export async function handleTextMessage(from, text, quotedMsgId = null) {
+  // Wait if another message from same user is being processed
+  if (processingLock.has(from)) {
+    await new Promise(r => setTimeout(r, 500)); // Brief wait
+    if (processingLock.has(from)) return; // Still locked, drop (Meta will retry)
+  }
+  processingLock.add(from);
+  try {
+    return await _handleTextMessage(from, text, quotedMsgId);
+  } finally {
+    processingLock.delete(from);
+  }
+}
+
+async function _handleTextMessage(from, text, quotedMsgId = null) {
   const lower = text.trim().toLowerCase();
 
   // Check if this is a reply to a bot message linked to a reminder
@@ -514,6 +531,17 @@ async function saveAndConfirm(from, parsed, settings) {
  * Process a button reply (snooze / done).
  */
 export async function handleButtonReply(from, buttonId) {
+  // Extract reminder ID and verify ownership before any action
+  const idMatch = buttonId.match(/:(\d+)/);
+  if (idMatch) {
+    const checkId = parseInt(idMatch[1], 10);
+    const checkReminder = await getReminder(checkId);
+    if (checkReminder && checkReminder.chat_id !== from) {
+      console.warn(`[Security] User ${from} tried to act on reminder ${checkId} owned by ${checkReminder.chat_id}`);
+      return;
+    }
+  }
+
   if (buttonId.startsWith('snooze:')) {
     const [, idStr, minsStr] = buttonId.split(':');
     const reminderId = parseInt(idStr, 10);
