@@ -4,7 +4,7 @@
  */
 import 'dotenv/config';
 
-// Validate required environment variables
+// Validate required environment variables (runs before bot imports)
 const required = ['DATABASE_URL', 'TELEGRAM_BOT_TOKEN', 'ANTHROPIC_API_KEY', 'WHATSAPP_ACCESS_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID'];
 const missing = required.filter(k => !process.env[k]);
 if (missing.length > 0) {
@@ -20,11 +20,9 @@ process.on('unhandledRejection', (reason) => {
   console.error('[FATAL] Unhandled rejection:', reason);
 });
 
-// Start Telegram bot
-import './src/index.js';
-
-// Start WhatsApp bot (webhook server)
-import './src/whatsapp/index.js';
+// Start bots (dynamic import so env validation runs first)
+await import('./src/index.js');
+await import('./src/whatsapp/index.js');
 
 // Graceful shutdown — Railway sends SIGTERM before killing
 async function shutdown(signal) {

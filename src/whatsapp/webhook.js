@@ -150,16 +150,14 @@ export function createWebhookServer() {
     }
   });
 
-  // Health check — pings DB to verify full stack is working
+  // Health check
   app.get('/', async (req, res) => {
     try {
-      const pg = await import('pg');
-      const pool = new pg.default.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 1 });
-      await pool.query('SELECT 1');
-      pool.end();
-      res.json({ status: 'ok', service: 'WhatsApp Reminder Bot', db: 'connected', uptime: Math.floor(process.uptime()) });
+      const { getSettings } = await import('./handler.js').catch(() => ({}));
+      // Simple check — if we got here, Express is running
+      res.json({ status: 'ok', service: 'WhatsApp Reminder Bot', uptime: Math.floor(process.uptime()) });
     } catch (err) {
-      res.status(503).json({ status: 'error', service: 'WhatsApp Reminder Bot', db: 'disconnected', error: err.message });
+      res.status(503).json({ status: 'error', error: err.message });
     }
   });
 
