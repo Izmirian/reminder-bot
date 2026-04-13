@@ -200,6 +200,10 @@ Classify the message into one of these intents and return a JSON object:
    Return: { "intent": "followup", "action": "create|list|done", "person": "name", "subject": "what", "days": number or null, "id": number or null }
    - "follow up with Sarah in 3 days about the proposal" → action=create, person="Sarah", subject="proposal", days=3
    - "waiting on John for the invoice" → action=create, person="John", subject="invoice", days=3
+   - "reply to Mrs Samia" → action=create, person="Mrs Samia", subject="reply", days=3
+   - "get back to John" → action=create, person="John", subject="get back", days=3
+   - "respond to Sarah" → action=create, person="Sarah", subject="respond", days=3
+   - IMPORTANT: "reply to [person]", "get back to [person]", "respond to [person]" = followup tracking, NOT email. Only use "email" intent when user explicitly says "draft email", "email", or "send email".
    - "show follow-ups" → action=list
    - "followup 2 done" → action=done, id=2
 

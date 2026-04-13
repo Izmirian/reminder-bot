@@ -344,6 +344,30 @@ export async function buildDashboard(chatId, timezone) {
     }
   } catch (e) { /* dashboard section failed silently */ }
 
+  // Follow-ups
+  try {
+    const followups = await getPendingFollowups(chatId);
+    if (followups.length > 0) {
+      msg += '\n\n*Follow-ups:*';
+      for (const f of followups) {
+        const due = new Date(f.follow_up_at).toLocaleDateString('en-US', { timeZone: timezone, month: 'short', day: 'numeric' });
+        msg += `\n#${f.id} ${f.person} — ${f.subject} (${due})`;
+      }
+    }
+  } catch (e) { /* dashboard section failed silently */ }
+
+  // Projects
+  try {
+    const projects = await getProjects(chatId);
+    if (projects.length > 0) {
+      msg += '\n\n*Projects:*';
+      for (const p of projects) {
+        const tasks = await getProjectReminders(chatId, p.id);
+        msg += `\n${p.name}: ${tasks.length} tasks`;
+      }
+    }
+  } catch (e) { /* dashboard section failed silently */ }
+
   // URL Monitors
   try {
     const monitors = await getUserMonitors(chatId);
