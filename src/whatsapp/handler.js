@@ -50,6 +50,7 @@ setInterval(() => {
   if (pendingPhotos.size > 0) { console.log(`[WA Cleanup] Clearing ${pendingPhotos.size} stale pending photos`); pendingPhotos.clear(); }
 }, 1800000);
 const lastCreated = new Map();
+const lastCreatedId = new Map(); // from -> last reminder ID
 
 // --- Helpers ---
 
@@ -144,16 +145,39 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
             return sendTextMessage(from, `Note added to "${reminder.text}": ${aiResult.note}`);
           }
         }
-        // Check for snooze-like patterns
-        const snoozeMatch = text.match(/(\d+)\s*(min|minute|hour|hr)/i);
+        // Check for snooze-like patterns — "30 min", "1 hour", or just a bare number "5" or "30" or "1h"
+        const snoozeMatch = text.match(/^(\d+)\s*(min|minute|hour|hr|h|m)?$/i) || text.match(/(\d+)\s*(min|minute|hour|hr)/i);
         if (snoozeMatch) {
           let mins = parseInt(snoozeMatch[1], 10);
-          if (/hour|hr/i.test(snoozeMatch[2])) mins *= 60;
+          if (/^(hour|hr|h)$/i.test(snoozeMatch[2] || '')) mins *= 60;
+          // Bare number: if >0 and <=120, treat as minutes. If just "1" or "2", treat as hours.
+          if (!snoozeMatch[2] && mins <= 3) mins *= 60; // "1" = 1 hour, "2" = 2 hours
           await dbSnooze(reminderId, new Date(Date.now() + mins * 60 * 1000).toISOString());
           await schedSnooze(reminderId, mins);
           const label = mins >= 60 ? `${mins / 60} hour(s)` : `${mins} minutes`;
           return sendTextMessage(from, `Snoozed "${reminder.text}" for ${label}`);
         }
+      }
+    }
+  }
+
+  // Shorthand: "also [note]" adds note to last reminder, "and [reminder]" creates another at same time
+  const lastId = lastCreatedId.get(from);
+  if (lastId && /^also\s+/i.test(lower)) {
+    const note = text.trim().replace(/^also\s+/i, '');
+    if (note) {
+      await addNoteToReminder(lastId, note);
+      return sendTextMessage(from, `Note added: ${note}`);
+    }
+  }
+  if (lastId && /^and\s+/i.test(lower)) {
+    const extraText = text.trim().replace(/^and\s+/i, '');
+    if (extraText) {
+      const last = lastCreated.get(from);
+      if (last?.remindAt) {
+        const settings2 = await getSettings(from);
+        await saveAndConfirm(from, { text: extraText, remindAt: last.remindAt, cronExpr: last.cronExpr, category: last.category, priority: last.priority }, settings2);
+        return;
       }
     }
   }
@@ -334,6 +358,20 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         }
         return;
       }
+      if (aiResult.action === 'complete') {
+        for (const id of ids) {
+          const r = activeRems.find(rem => rem.id === id);
+          if (r) {
+            cancelReminder(id);
+            await deactivateReminder(id);
+            await logCompletedReminder({ chatId: from, text: r.text, remindAt: r.remind_at });
+            // Track streak for recurring
+            if (r.cron_expr) { await updateStreak(from, r.text, r.cron_expr); }
+            await sendTextMessage(from, `Done: "${r.text}"`);
+          }
+        }
+        return;
+      }
       if (aiResult.action === 'add_note') {
         for (const id of ids) {
           const r = activeRems.find(rem => rem.id === id);
@@ -425,9 +463,28 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
       const reminders = aiResult.reminders || [];
       for (const r of reminders) {
         if (r.remindAt) {
+          // Handle "after this meeting" — check calendar for next event end time
+          let actualRemindAt = r.remindAt;
+          if (typeof r.remindAt === 'string' && r.remindAt.includes('AFTER_MEETING')) {
+            try {
+              const { getEventsNear, isConfigured } = await import('../google-calendar.js');
+              if (isConfigured()) {
+                const events = await getEventsNear(from, new Date().toISOString(), 180);
+                const currentOrNext = events.find(e => e.end && new Date(e.end) > new Date());
+                if (currentOrNext?.end) {
+                  actualRemindAt = new Date(new Date(currentOrNext.end).getTime() + 5 * 60000).toISOString(); // 5 min after meeting ends
+                  await sendTextMessage(from, `Setting reminder for after "${currentOrNext.summary}" ends`);
+                } else {
+                  return sendTextMessage(from, "No upcoming meetings found on your calendar. What time should I set the reminder?");
+                }
+              } else {
+                return sendTextMessage(from, "Google Calendar not connected. Say 'connect google calendar' first, or give me a specific time.");
+              }
+            } catch { actualRemindAt = new Date(Date.now() + 60 * 60000).toISOString(); } // fallback: 1 hour
+          }
           const parsed = {
             text: r.text,
-            remindAt: new Date(r.remindAt),
+            remindAt: new Date(actualRemindAt),
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
             priority: r.priority || 'normal',
@@ -501,6 +558,8 @@ async function saveAndConfirm(from, parsed, settings) {
     cronExpr: parsed.cronExpr, timezone: settings.timezone, category: parsed.category,
     priority: parsed.priority, sharedWith: parsed.sharedWith, createdBy: from,
   });
+
+  lastCreatedId.set(from, id);
 
   // Only schedule if the reminder is in the future
   if (parsed.remindAt.getTime() > Date.now()) {

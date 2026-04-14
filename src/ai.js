@@ -114,6 +114,7 @@ Classify the message into one of these intents and return a JSON object:
    - "move dinner to 8pm" → action=reschedule, match "dinner" to its ID, include newTime
    - "change soccer to basketball" → action=edit, match "soccer" to its ID, include newText
    - "delete the first one" → ids = [first reminder ID]
+   - "done with dentist" or "finished the gym" or "completed the call" → action=complete, match by text, return its ID. This MARKS IT DONE (logs completion + deactivates), different from cancel.
    - "note: bring the documents" or "add note to factory reminder: need 15k" → action=add_note, match reminder, include note
    - If you can't determine which reminder, return: { "intent": "action", "needsInfo": "Which reminder? ..." }
 
@@ -174,6 +175,7 @@ Classify the message into one of these intents and return a JSON object:
    - "how much did I spend this week?" → action=summary, period="week"
    - "show my expenses" → action=list, period="week"
    - Default currency is JOD if not specified. Only set currency if user explicitly mentions USD, EUR, etc.
+   - **Auto-detect spending:** If the user sends just a number + store/description like "50 carrefour" or "120 pharmacy" or "25 uber", classify as expense with action=add. No need for "spent" keyword.
 
 12. **"timer"** — The user wants a pomodoro/focus timer.
    Return: { "intent": "timer", "action": "start|stop|status", "minutes": number or null, "label": "text or null" }
@@ -248,6 +250,10 @@ Day + time-of-day combos (these are valid because they include BOTH day and time
 - "tomorrow morning" = tomorrow 9:00 AM, "tomorrow evening" = tomorrow 7:00 PM
 - "next Monday morning" = next Monday 9:00 AM
 - "this weekend morning" = Saturday 10:00 AM
+
+Smart time phrases:
+- "after this meeting" or "after my meeting" → return remindAt as "AFTER_MEETING" (handler will check calendar for next event end time)
+- "after work" = 6:00 PM (already defined above)
 
 INVALID (day/date ONLY — no time specified, must ask for time):
 - "tomorrow" alone → needsInfo: "What time tomorrow?"
