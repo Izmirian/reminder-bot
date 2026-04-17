@@ -209,6 +209,44 @@ async function fetchWeather(location) {
   } catch { return null; }
 }
 
+// Fetch personalized morning news via DuckDuckGo + Claude
+async function fetchMorningNews(chatId) {
+  try {
+    // Get user's interests from memory
+    const { getMemories } = await import('../db.js');
+    const memories = await getMemories(chatId);
+    const interests = memories.map(m => m.fact).join(', ').substring(0, 200);
+
+    // Search for relevant news
+    const query = interests.length > 10
+      ? `latest news ${interests.split(',').slice(0, 3).join(' ')}`
+      : 'top tech business news today';
+
+    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const res = await fetch(searchUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    let html = await res.text();
+    html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    html = html.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+    html = html.replace(/<[^>]+>/g, ' ');
+    html = html.replace(/\s+/g, ' ').trim();
+    if (html.length > 3000) html = html.substring(0, 3000);
+    if (html.length < 100) return null;
+
+    const { default: Anthropic } = await import('@anthropic-ai/sdk');
+    const client = new Anthropic();
+    const resp = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      messages: [{ role: 'user', content: `From these search results, pick the 3 most interesting news items. Format as bullet points, one line each, very concise. No preamble.\n\n${html}` }],
+    });
+    return resp.content[0]?.text || null;
+  } catch { return null; }
+}
+
 export function setupWhatsAppDigest() {
   // Birthday check for WhatsApp users daily at 8am
   cron.schedule('0 8 * * *', async () => {
@@ -265,15 +303,28 @@ export function setupWhatsAppDigest() {
       if (todaysReminders.length === 0) continue;
 
       let message = '*Good morning!*\n';
-      const weather = await fetchWeather(settings.location);
-      if (weather) {
-        message += `\n${weather.temp}°C, ${weather.desc}`;
-        if (weather.feelsLike !== weather.temp) message += ` (feels ${weather.feelsLike}°C)`;
-        message += '\n';
-      }
+
+      // Calendar events today (if Google Calendar connected)
+      try {
+        const { isConfigured, getEventsNear } = await import('../google-calendar.js');
+        if (isConfigured()) {
+          const noon = new Date(); noon.setHours(12, 0, 0, 0);
+          const events = await getEventsNear(chatId, noon, 720); // 12hr window = full day
+          if (events && events.length > 0) {
+            message += '\n*Calendar:*';
+            for (const e of events.slice(0, 5)) {
+              const eTime = new Date(e.start).toLocaleTimeString('en-US', {
+                timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true,
+              });
+              message += `\n  ${eTime} — ${e.summary}`;
+            }
+            message += '\n';
+          }
+        }
+      } catch {}
 
       const letters = 'abcdefghijklmnopqrstuvwxyz';
-      message += `\nToday you have ${todaysReminders.length} reminder${todaysReminders.length === 1 ? '' : 's'}:\n`;
+      message += `\n*Today's reminders (${todaysReminders.length}):*`;
       for (let i = 0; i < todaysReminders.length; i++) {
         const r = todaysReminders[i];
         const time = new Date(r.remind_at).toLocaleTimeString('en-US', {
@@ -284,14 +335,37 @@ export function setupWhatsAppDigest() {
         if (r.notes) message += `\n     Note: ${r.notes}`;
         if (r.cron_expr) {
           const streak = await getStreak(chatId, r.text);
-          if (streak?.current_streak > 1) message += `\n     Streak: ${streak.current_streak} days`;
+          if (streak?.current_streak > 1) message += `\n     🔥 ${streak.current_streak}-day streak`;
         }
       }
+
+      // Overdue reminders
+      try {
+        const { getActiveReminders: getActive } = await import('../db.js');
+        const allActive = await getActive(chatId);
+        const overdue = allActive.filter(r => new Date(r.remind_at) < new Date() && !r.cron_expr);
+        if (overdue.length > 0) {
+          message += `\n\n⚠️ *Overdue (${overdue.length}):*`;
+          for (const r of overdue.slice(0, 3)) message += `\n  • ${r.text}`;
+          if (overdue.length > 3) message += `\n  ...and ${overdue.length - 3} more`;
+        }
+      } catch {}
+
+      // Due follow-ups
+      try {
+        const { getDueFollowups } = await import('../db.js');
+        const followups = await getDueFollowups(chatId);
+        if (followups.length > 0) {
+          message += `\n\n*Follow-ups due:*`;
+          for (const f of followups.slice(0, 3)) message += `\n  • ${f.person} — ${f.subject}`;
+        }
+      } catch {}
+
       // Yesterday's spending
       try {
         const { getExpenseSummary } = await import('../db.js');
         const yesterday = await getExpenseSummary(chatId, 1);
-        if (yesterday.count > 0) message += `\n\nLast 24h spending: *${yesterday.total.toFixed(2)}* (${yesterday.count} transactions)`;
+        if (yesterday.count > 0) message += `\n\nLast 24h spending: *${yesterday.total.toFixed(2)}* (${yesterday.count} items)`;
       } catch {}
 
       // Upcoming birthdays
@@ -308,12 +382,18 @@ export function setupWhatsAppDigest() {
           return diff >= 0 && diff <= 7;
         });
         if (upcoming.length > 0) {
-          message += '\n\nUpcoming birthdays:';
+          message += '\n\n*Birthdays this week:*';
           for (const c of upcoming) message += `\n  🎂 ${c.name} (${c.birthday})`;
         }
       } catch {}
 
-      message += '\n\nHave a good day!';
+      // Morning news — personalized via DuckDuckGo + Claude
+      try {
+        const newsSnippet = await fetchMorningNews(chatId);
+        if (newsSnippet) message += `\n\n*News for you:*\n${newsSnippet}`;
+      } catch {}
+
+      message += '\n\nHave a productive day!';
 
       try {
         await sendTextMessage(chatId, message);
@@ -451,6 +531,66 @@ export function setupWhatsAppDigest() {
       }
     } catch (err) {
       console.error('[WhatsApp URL Monitor] Check failed:', err.message);
+    }
+  });
+
+  // Weekly review — Sunday 8pm (WhatsApp users)
+  cron.schedule('0 20 * * 0', async () => {
+    try {
+      const allRems = await getAllActiveReminders();
+      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      for (const chatId of waChatIds) {
+        const settings = await getSettings(chatId);
+        if (!settings.daily_digest) continue;
+
+        const stats = await import('../db.js').then(db => db.getWeeklyStats(chatId));
+        const { getExpenseSummary, getActiveReminders: getActive, getPendingFollowups, getJournalEntries, getAllStreaks } = await import('../db.js');
+
+        const active = await getActive(chatId);
+        const weekSpend = await getExpenseSummary(chatId, 7);
+        const followups = await getPendingFollowups(chatId);
+        const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+        const journal = await getJournalEntries(chatId, weekAgo, new Date().toISOString());
+        const streaks = await getAllStreaks(chatId);
+
+        let msg = '*📊 Weekly Review*\n';
+
+        // Stats
+        msg += `\n*This week:*`;
+        msg += `\n  ✅ ${stats.completed} completed`;
+        if (stats.snoozed > 0) msg += `\n  ⏰ ${stats.snoozed} snoozed`;
+        if (stats.missed > 0) msg += `\n  ❌ ${stats.missed} missed`;
+        msg += `\n  📋 ${active.length} still pending`;
+
+        // Spending
+        if (weekSpend.count > 0) {
+          msg += `\n\n*Spending:* ${weekSpend.total.toFixed(2)} across ${weekSpend.count} transactions`;
+        }
+
+        // Journal
+        msg += `\n\n*Journal:* ${journal.length}/7 days logged`;
+
+        // Active streaks
+        const activeStreaks = streaks.filter(s => s.current_streak >= 3);
+        if (activeStreaks.length > 0) {
+          msg += '\n\n*Streaks:*';
+          for (const s of activeStreaks.slice(0, 5)) {
+            msg += `\n  🔥 ${s.task_text} — ${s.current_streak} days`;
+          }
+        }
+
+        // Pending follow-ups
+        if (followups.length > 0) {
+          msg += `\n\n*Open follow-ups (${followups.length}):*`;
+          for (const f of followups.slice(0, 3)) msg += `\n  • ${f.person} — ${f.subject}`;
+        }
+
+        msg += '\n\nAnything you want to plan for next week?';
+
+        sendTextMessage(chatId, msg).catch(e => console.error('[WA Weekly Review]', e.message));
+      }
+    } catch (err) {
+      console.error('[WA Weekly Review] Error:', err.message);
     }
   });
 }

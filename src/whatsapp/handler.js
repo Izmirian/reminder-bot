@@ -1086,3 +1086,118 @@ async function createReminderAndSchedule(from, parsed, settings) {
 
   return id;
 }
+
+// --- Voice note transcription via OpenAI Whisper ---
+
+async function transcribeAudio(audioBuffer, mimeType) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const formData = new FormData();
+    formData.append('file', new Blob([audioBuffer], { type: mimeType }), `voice.${ext}`);
+    formData.append('model', 'whisper-1');
+    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: formData,
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.text || null;
+  } catch (err) {
+    console.error('[Transcribe] Error:', err.message);
+    return null;
+  }
+}
+
+export async function handleAudioMessage(from, audioId, mimeType) {
+  try {
+    const mediaUrl = await getMediaUrl(audioId);
+    if (!mediaUrl) return sendTextMessage(from, "Couldn't process that voice note.");
+    const buffer = await downloadMedia(mediaUrl);
+    if (!buffer) return sendTextMessage(from, "Couldn't download the voice note.");
+
+    const transcript = await transcribeAudio(buffer, mimeType);
+    if (!transcript) {
+      if (!process.env.OPENAI_API_KEY) return sendTextMessage(from, 'Voice notes need an OpenAI API key to be configured.');
+      return sendTextMessage(from, 'Failed to transcribe voice note. Try again or type your message.');
+    }
+
+    // Echo the transcription, then process as regular text
+    await sendTextMessage(from, `🎙️ _"${transcript}"_`);
+    return handleTextMessage(from, transcript);
+  } catch (err) {
+    console.error('[Audio] Error:', err.message);
+    return sendTextMessage(from, 'Failed to process voice note.');
+  }
+}
+
+// --- Reaction-based quick actions ---
+
+export async function handleReactionMessage(from, emoji, reactedMsgId) {
+  const reminderId = messageReminderMap.get(reactedMsgId);
+  if (!reminderId) return; // Not a bot reminder message
+
+  try {
+    if (emoji === '👍' || emoji === '✅') {
+      // Mark as done
+      await logCompletedReminder(reminderId);
+      await deactivateReminder(reminderId);
+      const { cancelReminder: cancel } = await import('./scheduler.js');
+      cancel(reminderId);
+      await sendTextMessage(from, 'Marked as done ✓');
+    } else if (emoji === '⏰' || emoji === '🔁') {
+      // Snooze 1 hour
+      const settings = await getSettings(from);
+      const newTime = new Date(Date.now() + 60 * 60 * 1000);
+      await dbSnooze(reminderId, newTime.toISOString());
+      await incrementSnoozeCount(reminderId);
+      const { snoozeReminder: schedSnoozeWA } = await import('./scheduler.js');
+      await schedSnoozeWA(reminderId, 60);
+      const timeStr = newTime.toLocaleTimeString('en-US', {
+        timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true,
+      });
+      await sendTextMessage(from, `Snoozed 1 hour → ${timeStr}`);
+    } else if (emoji === '❌') {
+      // Cancel
+      await deactivateReminder(reminderId);
+      const { cancelReminder: cancel } = await import('./scheduler.js');
+      cancel(reminderId);
+      await sendTextMessage(from, 'Cancelled ✓');
+    }
+  } catch (err) {
+    console.error('[Reaction] Error:', err.message);
+  }
+}
+
+// --- Location message handling ---
+
+export async function handleLocationMessage(from, latitude, longitude, name, address) {
+  try {
+    // Save user's last known location
+    await setLocation(from, name || address || `${latitude.toFixed(4)},${longitude.toFixed(4)}`);
+
+    // Check if any active reminders have location-related keywords
+    const active = await getActiveReminders(from);
+    const locationReminders = active.filter(r => {
+      const text = (r.text + ' ' + (r.notes || '')).toLowerCase();
+      return /\bat\b|\bnear\b|\bwhen i'm at\b|\bwhen i get to\b|\bstop by\b|\bpick up/i.test(text);
+    });
+
+    if (locationReminders.length > 0) {
+      let msg = `📍 *Location noted.* You have ${locationReminders.length} location-tagged reminder${locationReminders.length > 1 ? 's' : ''}:\n`;
+      for (const r of locationReminders.slice(0, 5)) {
+        msg += `\n• ${r.text}`;
+      }
+      msg += '\n\nReply "done with [task]" to mark any as complete.';
+      return sendTextMessage(from, msg);
+    }
+
+    return sendTextMessage(from, `📍 Location saved: ${name || address || 'your current location'}`);
+  } catch (err) {
+    console.error('[Location] Error:', err.message);
+    return sendTextMessage(from, 'Location received.');
+  }
+}

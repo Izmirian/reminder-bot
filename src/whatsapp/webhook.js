@@ -4,7 +4,7 @@
  */
 import express from 'express';
 import crypto from 'crypto';
-import { handleTextMessage, handleButtonReply, handleImageMessage, handleDocumentMessage } from './handler.js';
+import { handleTextMessage, handleButtonReply, handleImageMessage, handleDocumentMessage, handleAudioMessage, handleReactionMessage, handleLocationMessage } from './handler.js';
 import { markAsRead } from './api.js';
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'selfreminder_webhook_2024';
@@ -107,6 +107,26 @@ export function createWebhookServer() {
               const filename = msg.document?.filename || 'document';
               if (docId) {
                 await handleDocumentMessage(from, docId, caption, mimeType, filename);
+              }
+            } else if (msg.type === 'audio') {
+              const audioId = msg.audio?.id;
+              const mimeType = msg.audio?.mime_type || 'audio/ogg';
+              if (audioId) {
+                await handleAudioMessage(from, audioId, mimeType);
+              }
+            } else if (msg.type === 'reaction') {
+              const emoji = msg.reaction?.emoji;
+              const reactedMsgId = msg.reaction?.message_id;
+              if (emoji && reactedMsgId) {
+                await handleReactionMessage(from, emoji, reactedMsgId);
+              }
+            } else if (msg.type === 'location') {
+              const lat = msg.location?.latitude;
+              const lng = msg.location?.longitude;
+              const name = msg.location?.name || '';
+              const address = msg.location?.address || '';
+              if (lat && lng) {
+                await handleLocationMessage(from, lat, lng, name, address);
               }
             } else if (msg.type === 'interactive') {
               const buttonId = msg.interactive?.button_reply?.id;
