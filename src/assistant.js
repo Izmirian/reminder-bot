@@ -364,16 +364,6 @@ export async function buildDashboard(chatId, timezone) {
     }
   } catch (e) { /* dashboard section failed silently */ }
 
-  // Expenses
-  try {
-    const week = await getExpenseSummary(chatId, 7);
-    const today = await getExpenseSummary(chatId, 1);
-    if (week.count > 0) {
-      msg += `\n\n*Spending:* ${week.total.toFixed(2)} this week (${week.count} transactions)`;
-      if (today.count > 0) msg += `\nToday: ${today.total.toFixed(2)}`;
-    }
-  } catch (e) { /* dashboard section failed silently */ }
-
   // Streaks
   try {
     const streaks = await getAllStreaks(chatId);
