@@ -12,8 +12,27 @@ import {
 /**
  * Fetch a URL and return its text content (stripped of scripts/styles).
  */
+async function isUrlSafe(urlStr) {
+  try {
+    const parsed = new URL(urlStr);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+    const hostname = parsed.hostname;
+    if (['localhost', 'metadata.google.internal', 'instance-data'].includes(hostname)) return false;
+    const { lookup } = await import('dns/promises');
+    const { address } = await lookup(hostname);
+    const parts = address.split('.').map(Number);
+    if (parts[0] === 127 || parts[0] === 10) return false;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false;
+    if (parts[0] === 192 && parts[1] === 168) return false;
+    if (parts[0] === 169 && parts[1] === 254) return false;
+    if (address === '0.0.0.0' || address === '::1') return false;
+    return true;
+  } catch { return false; }
+}
+
 async function fetchPageContent(url) {
   try {
+    if (!await isUrlSafe(url)) { console.warn(`[URL Monitor] Blocked private URL: ${url}`); return null; }
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ReminderBot/1.0)' },
       signal: AbortSignal.timeout(15000),

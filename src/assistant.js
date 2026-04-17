@@ -16,6 +16,28 @@ import {
   getRemindersNear, createReminder,
 } from './db.js';
 
+// SSRF protection — block requests to private/internal IPs
+import dns from 'dns/promises';
+async function isUrlSafe(urlStr) {
+  try {
+    const parsed = new URL(urlStr);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+    const hostname = parsed.hostname;
+    // Block common metadata/internal hostnames
+    if (['localhost', 'metadata.google.internal', 'instance-data'].includes(hostname)) return false;
+    // Resolve DNS and check for private IPs
+    const { address } = await dns.lookup(hostname);
+    const parts = address.split('.').map(Number);
+    if (parts[0] === 127) return false; // loopback
+    if (parts[0] === 10) return false; // 10.0.0.0/8
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false; // 172.16.0.0/12
+    if (parts[0] === 192 && parts[1] === 168) return false; // 192.168.0.0/16
+    if (parts[0] === 169 && parts[1] === 254) return false; // link-local / cloud metadata
+    if (address === '0.0.0.0' || address === '::1') return false;
+    return true;
+  } catch { return false; }
+}
+
 // Rate limit expensive AI calls (summarize, research, receipt scan) — max 5/min per chat
 const expensiveCallTracker = new Map();
 function checkExpensiveRateLimit(chatId) {
@@ -435,6 +457,7 @@ export async function buildDashboard(chatId, timezone) {
 export async function handleSummarizeIntent(url, chatId) {
   if (chatId && !checkExpensiveRateLimit(chatId)) return 'Too many requests. Try again in a minute.';
   try {
+    if (!await isUrlSafe(url)) return 'That URL is not allowed (private/internal address).';
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ReminderBot/1.0)' },
       signal: AbortSignal.timeout(15000),
@@ -599,6 +622,30 @@ export async function handleResearchIntent(aiResult, chatId) {
   if (chatId && !checkExpensiveRateLimit(chatId)) return 'Too many requests. Try again in a minute.';
   const { query: searchQuery, type } = aiResult;
   try {
+    // If query contains a domain/URL, fetch the site directly first
+    let siteContent = '';
+    const domainMatch = searchQuery.match(/(?:https?:\/\/)?([a-zA-Z0-9-]+(?:\.[a-zA-Z]{2,})+)(?:\/[^\s]*)?/);
+    if (domainMatch) {
+      try {
+        const siteUrl = domainMatch[0].startsWith('http') ? domainMatch[0] : `https://${domainMatch[0]}`;
+        if (!await isUrlSafe(siteUrl)) throw new Error('blocked');
+        const siteRes = await fetch(siteUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+          signal: AbortSignal.timeout(15000),
+          redirect: 'follow',
+        });
+        if (siteRes.ok) {
+          let siteText = await siteRes.text();
+          siteText = siteText.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+          siteText = siteText.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+          siteText = siteText.replace(/<[^>]+>/g, ' ');
+          siteText = siteText.replace(/\s+/g, ' ').trim();
+          if (siteText.length > 4000) siteText = siteText.substring(0, 4000);
+          if (siteText.length > 100) siteContent = siteText;
+        }
+      } catch (e) { /* site fetch failed, continue with search only */ }
+    }
+
     // Use DuckDuckGo HTML (doesn't block bots like Google does)
     const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(searchQuery)}`;
     const res = await fetch(searchUrl, {
@@ -618,14 +665,15 @@ export async function handleResearchIntent(aiResult, chatId) {
 
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic();
+    const siteSection = siteContent ? `\n\nContent from the website:\n${siteContent}` : '';
     const prompt = type === 'price'
-      ? `Based on these search results, compare prices and options for: ${searchQuery}. List top options with prices in a clear format.`
-      : `Based on these search results, provide a comprehensive answer about: ${searchQuery}. Include key findings from multiple sources.`;
+      ? `Based on the information below, compare prices and options for: ${searchQuery}. List top options with prices in a clear format.${siteContent ? ' Prioritize data from the actual website content over search results.' : ''}`
+      : `Based on the information below, provide a comprehensive answer about: ${searchQuery}. Include key findings.${siteContent ? ' Prioritize data from the actual website content over search results.' : ''}`;
 
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 800,
-      messages: [{ role: 'user', content: `${prompt}\n\nSearch results:\n${html}` }],
+      messages: [{ role: 'user', content: `${prompt}${siteSection}\n\nSearch results:\n${html}` }],
     });
     return response.content[0]?.text || 'Could not find results.';
   } catch (err) {

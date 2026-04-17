@@ -738,8 +738,12 @@ export async function updateMonitorPrice(id, price) {
   await run('UPDATE url_monitors SET last_price = ?, last_checked = NOW() WHERE id = ?', [price, id]);
 }
 
-export async function deactivateMonitor(id) {
-  await run('UPDATE url_monitors SET active = 0 WHERE id = ?', [id]);
+export async function deactivateMonitor(id, chatId) {
+  if (chatId) {
+    await run('UPDATE url_monitors SET active = 0 WHERE id = ? AND chat_id = ?', [id, chatId]);
+  } else {
+    await run('UPDATE url_monitors SET active = 0 WHERE id = ?', [id]);
+  }
 }
 
 // --- Documents ---

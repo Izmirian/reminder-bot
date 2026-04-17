@@ -1,6 +1,7 @@
 /**
  * Google Calendar integration — OAuth2 flow, event CRUD, two-way sync.
  */
+import crypto from 'crypto';
 import { google } from 'googleapis';
 import {
   getGoogleTokens, setGoogleTokens, setGoogleEventId,
@@ -27,17 +28,45 @@ function getOAuth2Client(tokens) {
 }
 
 /**
- * Get the Google OAuth2 consent URL.
+ * Pending OAuth sessions — maps nonce → { chatId, expiresAt }.
+ * Prevents state-forgery attacks where an attacker substitutes another user's chatId.
+ */
+const pendingAuthSessions = new Map();
+
+/**
+ * Get the Google OAuth2 consent URL with a signed nonce.
  */
 export function getAuthUrl(chatId) {
   if (!CLIENT_ID || !CLIENT_SECRET) return null;
   const client = getOAuth2Client();
+  // Generate random nonce instead of passing raw chatId as state
+  const nonce = crypto.randomUUID();
+  pendingAuthSessions.set(nonce, { chatId, expiresAt: Date.now() + 10 * 60 * 1000 }); // 10 min TTL
+  // Cleanup expired sessions
+  for (const [k, v] of pendingAuthSessions) {
+    if (v.expiresAt < Date.now()) pendingAuthSessions.delete(k);
+  }
   return client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     scope: ['https://www.googleapis.com/auth/calendar'],
-    state: chatId,
+    state: nonce,
   });
+}
+
+/**
+ * Resolve a nonce back to the chatId that initiated it.
+ * Returns null if nonce is invalid or expired.
+ */
+export function resolveAuthNonce(nonce) {
+  const session = pendingAuthSessions.get(nonce);
+  if (!session) return null;
+  if (session.expiresAt < Date.now()) {
+    pendingAuthSessions.delete(nonce);
+    return null;
+  }
+  pendingAuthSessions.delete(nonce); // single-use
+  return session.chatId;
 }
 
 /**

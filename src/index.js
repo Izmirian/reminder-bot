@@ -683,7 +683,7 @@ bot.on('message', async (msg) => {
         return;
       }
       if (aiResult.action === 'stop' && aiResult.id) {
-        await deactivateMonitor(aiResult.id);
+        await deactivateMonitor(aiResult.id, String(chatId));
         bot.sendMessage(chatId, `Stopped monitoring #${aiResult.id}`);
         return;
       }

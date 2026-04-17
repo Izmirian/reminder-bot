@@ -139,10 +139,13 @@ export function createWebhookServer() {
 
   app.get('/auth/google/callback', async (req, res) => {
     try {
-      const { handleCallback } = await import('../google-calendar.js');
+      const { handleCallback, resolveAuthNonce } = await import('../google-calendar.js');
       const code = req.query.code;
-      const chatId = req.query.state;
-      if (!code || !chatId) return res.status(400).send('Missing code or state');
+      const nonce = req.query.state;
+      if (!code || !nonce) return res.status(400).send('Missing code or state');
+      // Resolve nonce to chatId — prevents state-forgery attacks
+      const chatId = resolveAuthNonce(nonce);
+      if (!chatId) return res.status(403).send('Invalid or expired auth session. Please start the connection again from the bot.');
       await handleCallback(code, chatId);
       res.send('<h2>Google Calendar connected!</h2><p>You can close this window and go back to the bot.</p>');
     } catch (err) {
@@ -151,53 +154,8 @@ export function createWebhookServer() {
     }
   });
 
-  // --- GitHub Webhook — deploy/PR/push notifications ---
-  app.post('/github-webhook', async (req, res) => {
-    res.sendStatus(200);
-    try {
-      const event = req.headers['x-github-event'];
-      const payload = req.body;
-      const whatsappTo = process.env.WHATSAPP_TO_NUMBER;
-      if (!whatsappTo) return;
-
-      let message = null;
-
-      if (event === 'push') {
-        const repo = payload.repository?.name || 'repo';
-        const branch = payload.ref?.replace('refs/heads/', '') || '';
-        const commits = payload.commits?.length || 0;
-        const pusher = payload.pusher?.name || '';
-        const lastMsg = payload.head_commit?.message?.split('\n')[0] || '';
-        message = `*Push to ${repo}/${branch}*\n${commits} commit${commits > 1 ? 's' : ''} by ${pusher}\nLatest: ${lastMsg}`;
-      }
-
-      if (event === 'pull_request') {
-        const action = payload.action; // opened, closed, merged
-        const pr = payload.pull_request;
-        if (['opened', 'closed', 'reopened'].includes(action)) {
-          const merged = pr.merged ? ' (merged)' : '';
-          message = `*PR #${pr.number} ${action}${merged}*\n${pr.title}\nby ${pr.user?.login}`;
-        }
-      }
-
-      if (event === 'workflow_run') {
-        const run = payload.workflow_run;
-        if (run.conclusion === 'failure') {
-          message = `*Build Failed*\n${run.name} on ${run.head_branch}\n${run.html_url}`;
-        }
-        if (run.conclusion === 'success' && run.name.toLowerCase().includes('deploy')) {
-          message = `*Deploy Successful*\n${run.name} on ${run.head_branch}`;
-        }
-      }
-
-      if (message) {
-        const { sendTextMessage: sendWA } = await import('./api.js');
-        await sendWA(whatsappTo, message).catch(e => console.error('[GitHub Webhook]', e.message));
-      }
-    } catch (err) {
-      console.error('[GitHub Webhook] Error:', err.message);
-    }
-  });
+  // --- GitHub Webhook — disabled (alerts removed, endpoint kept as silent no-op) ---
+  app.post('/github-webhook', (_req, res) => res.sendStatus(200));
 
   // Health check
   app.get('/', (req, res) => {

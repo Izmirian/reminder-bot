@@ -81,20 +81,36 @@ function formatTime(isoStr, timezone) {
 
 // --- Main message handler ---
 
-// Per-user processing lock — prevents race conditions from concurrent messages
-const processingLock = new Set();
+// Per-user FIFO queue — prevents race conditions without dropping messages
+const userQueues = new Map(); // from → { processing: boolean, queue: [] }
 
 export async function handleTextMessage(from, text, quotedMsgId = null) {
-  // Wait if another message from same user is being processed
-  if (processingLock.has(from)) {
-    await new Promise(r => setTimeout(r, 500)); // Brief wait
-    if (processingLock.has(from)) return; // Still locked, drop (Meta will retry)
+  if (!userQueues.has(from)) userQueues.set(from, { processing: false, queue: [] });
+  const entry = userQueues.get(from);
+
+  // If already processing, queue this message instead of dropping it
+  if (entry.processing) {
+    if (entry.queue.length < 5) { // Cap queue to prevent abuse
+      entry.queue.push({ text, quotedMsgId });
+    }
+    return;
   }
-  processingLock.add(from);
+
+  entry.processing = true;
   try {
-    return await _handleTextMessage(from, text, quotedMsgId);
+    await _handleTextMessage(from, text, quotedMsgId);
+    // Process queued messages FIFO
+    while (entry.queue.length > 0) {
+      const next = entry.queue.shift();
+      await _handleTextMessage(from, next.text, next.quotedMsgId);
+    }
   } finally {
-    processingLock.delete(from);
+    entry.processing = false;
+    // Cleanup stale entries
+    if (userQueues.size > 500) {
+      const first = userQueues.keys().next().value;
+      userQueues.delete(first);
+    }
   }
 }
 
@@ -402,7 +418,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         return sendTextMessage(from, msg);
       }
       if (aiResult.action === 'stop' && aiResult.id) {
-        await deactivateMonitor(aiResult.id);
+        await deactivateMonitor(aiResult.id, from);
         return sendTextMessage(from, `Stopped monitoring #${aiResult.id}`);
       }
     }
