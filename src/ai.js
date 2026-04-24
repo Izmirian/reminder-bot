@@ -108,10 +108,15 @@ Classify the message into one of these intents and return a JSON object:
    - IMPORTANT: "cancel", "delete", "remove", "edit", "change", "move", "reschedule" referring to existing reminders should ALWAYS use intent "action", NOT "command".
 
 4. **"action"** — The user wants to cancel, edit, reschedule, or add notes to EXISTING reminders. Use this for ANY message about modifying, deleting, removing, or changing reminders.
-   Return: { "intent": "action", "action": "cancel|edit|reschedule|add_note", "ids": [1, 2], "newTime": "ISO8601 or null", "newText": "new text or null", "note": "note text or null" }
+   Keywords that ALWAYS mean action intent: "switch", "change", "move", "shift", "reschedule", "push", "delay", "postpone", "bring forward", "cancel", "delete", "remove" — when referring to reminders.
+   Return for single reschedule: { "intent": "action", "action": "reschedule", "ids": [1, 2], "newTime": "ISO8601" }
+   Return for MULTIPLE reminders with DIFFERENT times: { "intent": "action", "action": "reschedule", "updates": [{"id": 1, "newTime": "ISO8601"}, {"id": 2, "newTime": "ISO8601"}] }
+   Return for edit/cancel/note: { "intent": "action", "action": "cancel|edit|add_note|complete", "ids": [1, 2], "newText": "new text or null", "note": "note text or null" }
    - "cancel both" or "cancel all" → ids = all active reminder IDs
    - "cancel the soccer one" → match by text, return its ID
    - "move dinner to 8pm" → action=reschedule, match "dinner" to its ID, include newTime
+   - "switch gold exchange to 10:30am and lady bug to 10:45am" → action=reschedule, updates=[{id: <gold>, newTime: "...10:30"}, {id: <lady bug>, newTime: "...10:45"}]
+   - "push X and Y to 9am" → action=reschedule, ids=[X, Y], newTime="...09:00" (same time for both)
    - "change soccer to basketball" → action=edit, match "soccer" to its ID, include newText
    - "delete the first one" → ids = [first reminder ID]
    - "done with dentist" or "finished the gym" or "completed the call" → action=complete, match by text, return its ID. This MARKS IT DONE (logs completion + deactivates), different from cancel.
@@ -320,7 +325,7 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
     ];
 
     // Use Haiku for simple intents (cheaper), Sonnet for complex ones
-    const needsSonnet = needsFullContext || /summariz|research|compar|analyz|translate|explain|draft.*email/i.test(lowerMsg);
+    const needsSonnet = needsFullContext || /summariz|research|compar|analyz|translate|explain|draft.*email|switch.*(?:and|\+)|\b(?:move|change|reschedule|shift|push).*(?:and|\+)/i.test(lowerMsg);
     const model = needsSonnet ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20251001';
     const maxTokens = needsSonnet ? 800 : 400;
 

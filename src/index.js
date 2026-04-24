@@ -620,20 +620,50 @@ bot.on('message', async (msg) => {
         return;
       }
       if (aiResult.action === 'reschedule') {
+        const { updateReminderTime: updateTime } = await import('./db.js');
+        const { scheduleReminder: sched } = await import('./scheduler.js');
+        // Per-reminder updates (different times for different reminders)
+        if (Array.isArray(aiResult.updates) && aiResult.updates.length > 0) {
+          const results = [];
+          for (const u of aiResult.updates) {
+            const r = activeReminders.find(rem => rem.id === u.id);
+            if (r && u.newTime) {
+              cancelReminder(u.id);
+              await updateTime(u.id, new Date(u.newTime).toISOString());
+              sched({ ...r, remind_at: new Date(u.newTime).toISOString() });
+              const timeStr = new Date(u.newTime).toLocaleString('en-US', {
+                timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', hour12: true,
+              });
+              results.push(`"${r.text}" → ${timeStr}`);
+            }
+          }
+          if (results.length > 0) {
+            bot.sendMessage(chatId, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`);
+          } else {
+            bot.sendMessage(chatId, "Couldn't find those reminders to reschedule.");
+          }
+          return;
+        }
+        // Same time for all ids (existing behavior)
+        const results = [];
         for (const id of ids) {
           const r = activeReminders.find(rem => rem.id === id);
           if (r && aiResult.newTime) {
             cancelReminder(id);
-            const { updateReminderTime: updateTime } = await import('./db.js');
             await updateTime(id, new Date(aiResult.newTime).toISOString());
-            const { scheduleReminder: sched } = await import('./scheduler.js');
             sched({ ...r, remind_at: new Date(aiResult.newTime).toISOString() });
             const timeStr = new Date(aiResult.newTime).toLocaleString('en-US', {
               timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
               hour: '2-digit', minute: '2-digit', hour12: true,
             });
-            bot.sendMessage(chatId, `✅ Rescheduled "${r.text}" to ${timeStr}`);
+            results.push(`"${r.text}" → ${timeStr}`);
           }
+        }
+        if (results.length > 0) {
+          bot.sendMessage(chatId, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`);
+        } else {
+          bot.sendMessage(chatId, "Couldn't find those reminders to reschedule.");
         }
         return;
       }

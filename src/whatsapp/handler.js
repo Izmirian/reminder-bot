@@ -349,6 +349,29 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         return sendTextMessage(from, "Couldn't find those reminders.");
       }
       if (aiResult.action === 'reschedule') {
+        // Per-reminder updates (different times for different reminders)
+        if (Array.isArray(aiResult.updates) && aiResult.updates.length > 0) {
+          const results = [];
+          for (const u of aiResult.updates) {
+            const r = activeRems.find(rem => rem.id === u.id);
+            if (r && u.newTime) {
+              cancelReminder(u.id);
+              await updateReminderTime(u.id, new Date(u.newTime).toISOString());
+              scheduleReminder({ ...r, remind_at: new Date(u.newTime).toISOString() });
+              const timeStr = new Date(u.newTime).toLocaleString('en-US', {
+                timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', hour12: true,
+              });
+              results.push(`"${r.text}" → ${timeStr}`);
+            }
+          }
+          if (results.length > 0) {
+            return sendTextMessage(from, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`);
+          }
+          return sendTextMessage(from, "Couldn't find those reminders to reschedule.");
+        }
+        // Same time for all ids (existing behavior)
+        const results = [];
         for (const id of ids) {
           const r = activeRems.find(rem => rem.id === id);
           if (r && aiResult.newTime) {
@@ -359,10 +382,13 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
               timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
               hour: '2-digit', minute: '2-digit', hour12: true,
             });
-            await sendTextMessage(from, `✅ Rescheduled "${r.text}" to ${timeStr}`);
+            results.push(`"${r.text}" → ${timeStr}`);
           }
         }
-        return;
+        if (results.length > 0) {
+          return sendTextMessage(from, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`);
+        }
+        return sendTextMessage(from, "Couldn't find those reminders to reschedule.");
       }
       if (aiResult.action === 'edit') {
         for (const id of ids) {
