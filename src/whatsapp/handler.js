@@ -290,7 +290,13 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
   const settings = await getSettings(from);
   const activeRems = await getActiveReminders(from);
   const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString(), activeRems, from);
-  console.log(`[WA Intent] from=${from} msg="${text.substring(0, 80)}" → intent=${aiResult?.intent} action=${aiResult?.action} ids=${JSON.stringify(aiResult?.ids)} updates=${JSON.stringify(aiResult?.updates)?.substring(0, 150)}`);
+
+  // Only log reschedule-related intents so we can diagnose the bug (keeps normal logs clean)
+  if (aiResult && (aiResult.intent === 'action' || /switch|reschedule|move/i.test(text))) {
+    try {
+      console.log(`[WA Action] msg="${text.substring(0, 80)}" intent=${aiResult.intent} action=${aiResult.action} ids=${JSON.stringify(aiResult.ids || [])} updates=${JSON.stringify(aiResult.updates || []).substring(0, 200)}`);
+    } catch {}
+  }
 
   if (aiResult) {
     if (aiResult.intent === 'chat') {
