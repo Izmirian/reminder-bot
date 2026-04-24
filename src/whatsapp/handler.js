@@ -82,11 +82,18 @@ function formatTime(isoStr, timezone) {
 // --- Main message handler ---
 
 // Per-user FIFO queue — prevents race conditions without dropping messages
-const userQueues = new Map(); // from → { processing: boolean, queue: [] }
+const userQueues = new Map(); // from → { processing: boolean, queue: [], startedAt: number }
 
 export async function handleTextMessage(from, text, quotedMsgId = null) {
-  if (!userQueues.has(from)) userQueues.set(from, { processing: false, queue: [] });
+  if (!userQueues.has(from)) userQueues.set(from, { processing: false, queue: [], startedAt: 0 });
   const entry = userQueues.get(from);
+
+  // Safety: if processing has been stuck for >60s, reset it (prevents permanent lockup)
+  if (entry.processing && entry.startedAt && (Date.now() - entry.startedAt > 60000)) {
+    console.warn(`[Queue] Resetting stuck queue for ${from} after 60s`);
+    entry.processing = false;
+    entry.queue = [];
+  }
 
   // If already processing, queue this message instead of dropping it
   if (entry.processing) {
@@ -97,6 +104,7 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
   }
 
   entry.processing = true;
+  entry.startedAt = Date.now();
   try {
     await _handleTextMessage(from, text, quotedMsgId);
     // Process queued messages FIFO
@@ -104,8 +112,11 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       const next = entry.queue.shift();
       await _handleTextMessage(from, next.text, next.quotedMsgId);
     }
+  } catch (err) {
+    console.error(`[Handler] Error processing message from ${from}:`, err.message);
   } finally {
     entry.processing = false;
+    entry.startedAt = 0;
     // Cleanup stale entries
     if (userQueues.size > 500) {
       const first = userQueues.keys().next().value;
