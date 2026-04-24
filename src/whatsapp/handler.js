@@ -290,6 +290,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
   const settings = await getSettings(from);
   const activeRems = await getActiveReminders(from);
   const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString(), activeRems, from);
+  console.log(`[WA Intent] from=${from} msg="${text.substring(0, 80)}" → intent=${aiResult?.intent} action=${aiResult?.action} ids=${JSON.stringify(aiResult?.ids)} updates=${JSON.stringify(aiResult?.updates)?.substring(0, 150)}`);
 
   if (aiResult) {
     if (aiResult.intent === 'chat') {
@@ -360,46 +361,46 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         return sendTextMessage(from, "Couldn't find those reminders.");
       }
       if (aiResult.action === 'reschedule') {
-        // Per-reminder updates (different times for different reminders)
-        if (Array.isArray(aiResult.updates) && aiResult.updates.length > 0) {
+        try {
+          // Build a normalized list of updates: [{id, newTime}, ...]
+          let updates = [];
+          if (Array.isArray(aiResult.updates) && aiResult.updates.length > 0) {
+            updates = aiResult.updates;
+          } else if (ids.length > 0 && aiResult.newTime) {
+            updates = ids.map(id => ({ id, newTime: aiResult.newTime }));
+          }
+
+          if (updates.length === 0) {
+            console.warn(`[WA Reschedule] No valid updates — ids=${JSON.stringify(ids)} newTime=${aiResult.newTime} updates=${JSON.stringify(aiResult.updates)}`);
+            return sendTextMessage(from, "I need both the reminder(s) and the new time(s). Try: \"move gold exchange to 10:30am\".");
+          }
+
           const results = [];
-          for (const u of aiResult.updates) {
+          const notFound = [];
+          for (const u of updates) {
             const r = activeRems.find(rem => rem.id === u.id);
-            if (r && u.newTime) {
-              cancelReminder(u.id);
-              await updateReminderTime(u.id, new Date(u.newTime).toISOString());
-              scheduleReminder({ ...r, remind_at: new Date(u.newTime).toISOString() });
-              const timeStr = new Date(u.newTime).toLocaleString('en-US', {
-                timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
-                hour: '2-digit', minute: '2-digit', hour12: true,
-              });
-              results.push(`"${r.text}" → ${timeStr}`);
-            }
-          }
-          if (results.length > 0) {
-            return sendTextMessage(from, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`);
-          }
-          return sendTextMessage(from, "Couldn't find those reminders to reschedule.");
-        }
-        // Same time for all ids (existing behavior)
-        const results = [];
-        for (const id of ids) {
-          const r = activeRems.find(rem => rem.id === id);
-          if (r && aiResult.newTime) {
-            cancelReminder(id);
-            await updateReminderTime(id, new Date(aiResult.newTime).toISOString());
-            scheduleReminder({ ...r, remind_at: new Date(aiResult.newTime).toISOString() });
-            const timeStr = new Date(aiResult.newTime).toLocaleString('en-US', {
+            if (!r) { notFound.push(u.id); continue; }
+            if (!u.newTime) { notFound.push(u.id); continue; }
+            cancelReminder(u.id);
+            await updateReminderTime(u.id, new Date(u.newTime).toISOString());
+            scheduleReminder({ ...r, remind_at: new Date(u.newTime).toISOString() });
+            const timeStr = new Date(u.newTime).toLocaleString('en-US', {
               timeZone: settings.timezone, weekday: 'short', month: 'short', day: 'numeric',
               hour: '2-digit', minute: '2-digit', hour12: true,
             });
             results.push(`"${r.text}" → ${timeStr}`);
           }
+
+          if (results.length > 0) {
+            let msg = `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`;
+            if (notFound.length > 0) msg += `\n\n(Couldn't find: ${notFound.join(', ')})`;
+            return sendTextMessage(from, msg);
+          }
+          return sendTextMessage(from, `Couldn't find those reminders to reschedule. Active: ${activeRems.map(r => `#${r.id} ${r.text}`).join(', ')}`);
+        } catch (err) {
+          console.error('[WA Reschedule] Error:', err.message, err.stack);
+          return sendTextMessage(from, `Reschedule failed: ${err.message}`);
         }
-        if (results.length > 0) {
-          return sendTextMessage(from, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`);
-        }
-        return sendTextMessage(from, "Couldn't find those reminders to reschedule.");
       }
       if (aiResult.action === 'edit') {
         for (const id of ids) {
