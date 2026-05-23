@@ -602,7 +602,23 @@ export async function handleFollowupIntent(chatId, aiResult) {
     return `Follow-up #${id} marked done.`;
   }
 
-  return 'Not sure what to do with that follow-up.';
+  if (action === 'done_all') {
+    const pending = await getPendingFollowups(chatId);
+    if (pending.length === 0) return "You don't have any pending follow-ups. 🎉";
+    for (const f of pending) {
+      await completeFollowup(chatId, f.id);
+    }
+    if (pending.length === 1) return `✅ Marked follow-up done: ${pending[0].person} — ${pending[0].subject}`;
+    return `✅ Marked ${pending.length} follow-ups as done:\n${pending.map(f => `  • ${f.person} — ${f.subject}`).join('\n')}`;
+  }
+
+  // Fallback: if it's a single pending follow-up, the user might mean it
+  const pending = await getPendingFollowups(chatId);
+  if (pending.length === 0) return "You don't have any pending follow-ups. 🎉";
+  if (pending.length === 1) {
+    return `You have one pending follow-up:\n  • #${pending[0].id} ${pending[0].person} — ${pending[0].subject}\n\nReply "followup ${pending[0].id} done" to mark it complete, or "mark all follow-ups as done".`;
+  }
+  return `You have ${pending.length} pending follow-ups. To mark them done, say "mark all follow-ups as done" or "followup [#] done".`;
 }
 
 /**

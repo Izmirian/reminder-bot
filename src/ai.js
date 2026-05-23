@@ -214,7 +214,7 @@ Classify the message into one of these intents and return a JSON object:
    - "unpin 3" → action=remove, id=3
 
 16. **"followup"** — The user wants to track something they're waiting on from someone.
-   Return: { "intent": "followup", "action": "create|list|done", "person": "name", "subject": "what", "days": number or null, "id": number or null }
+   Return: { "intent": "followup", "action": "create|list|done|done_all", "person": "name", "subject": "what", "days": number or null, "id": number or null }
    - "follow up with Sarah in 3 days about the proposal" → action=create, person="Sarah", subject="proposal", days=3
    - "waiting on John for the invoice" → action=create, person="John", subject="invoice", days=3
    - "reply to Mrs Samia" → action=create, person="Mrs Samia", subject="reply", days=3
@@ -223,6 +223,7 @@ Classify the message into one of these intents and return a JSON object:
    - IMPORTANT: "reply to [person]", "get back to [person]", "respond to [person]" = followup tracking, NOT email. Only use "email" intent when user explicitly says "draft email", "email", or "send email".
    - "show follow-ups" → action=list
    - "followup 2 done" → action=done, id=2
+   - "mark all follow-ups as done", "complete all followups", "remove follow ups", "clear followups", "mark followups as completed" → action=done_all (marks every pending follow-up as done)
 
 17. **"research"** — The user wants multi-source research or price comparison.
    Return: { "intent": "research", "query": "what to research", "type": "general|price" }
