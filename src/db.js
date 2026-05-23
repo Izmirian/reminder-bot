@@ -525,7 +525,7 @@ export async function deactivateTodaysReminders(chatId, dateStr) {
 // Find active one-off reminders that are past due and were never fired
 export async function getMissedReminders() {
   return (await query(
-    "SELECT * FROM reminders WHERE active = 1 AND cron_expr IS NULL AND remind_at < NOW() AND last_fired_at IS NULL"
+    "SELECT * FROM reminders WHERE active = 1 AND cron_expr IS NULL AND remind_at::timestamptz < NOW() AND last_fired_at IS NULL"
   )).rows;
 }
 
@@ -597,7 +597,7 @@ export async function resetSnoozeCount(id) {
 // Fired / ignored tracking
 
 export async function markReminderFired(id) {
-  await run("UPDATE reminders SET last_fired_at = NOW(), ignored_since = COALESCE(ignored_since, NOW()) WHERE id = ?", [id]);
+  await run("UPDATE reminders SET last_fired_at = NOW()::text, ignored_since = COALESCE(ignored_since, NOW()::text) WHERE id = ?", [id]);
 }
 
 export async function clearIgnoredSince(id) {
@@ -771,7 +771,7 @@ export async function searchDocuments(chatId, searchQuery) {
 // Auto-deactivate one-off reminders older than 30 days that were never completed
 export async function cleanupStaleReminders() {
   const result = await run(
-    "UPDATE reminders SET active = 0 WHERE active = 1 AND cron_expr IS NULL AND remind_at < NOW() - INTERVAL '30 days'"
+    "UPDATE reminders SET active = 0 WHERE active = 1 AND cron_expr IS NULL AND remind_at::timestamptz < NOW() - INTERVAL '30 days'"
   );
   return result.changes || 0;
 }
@@ -1022,7 +1022,7 @@ export async function getPendingFollowups(chatId) {
 }
 
 export async function getDueFollowups(chatId) {
-  return (await query("SELECT * FROM followups WHERE chat_id = ? AND status = 'pending' AND follow_up_at <= NOW()", [chatId])).rows;
+  return (await query("SELECT * FROM followups WHERE chat_id = ? AND status = 'pending' AND follow_up_at::timestamptz <= NOW()", [chatId])).rows;
 }
 
 export async function completeFollowup(chatId, id) {
