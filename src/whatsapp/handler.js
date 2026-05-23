@@ -419,14 +419,18 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         return;
       }
       if (aiResult.action === 'complete') {
-        // If AI returns no IDs but the message asks for "all", complete all active
-        let targetIds = ids;
-        if (targetIds.length === 0 && /\b(all|every|everything)\b/i.test(text)) {
-          targetIds = activeRems.map(r => r.id);
+        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        // For bulk requests, ignore AI's ids (which may be stale) — use current active list
+        let targetIds = isBulkRequest ? activeRems.map(r => r.id) : ids;
+
+        // Empty active list when user asked to clear everything → friendly message
+        if (targetIds.length === 0 && isBulkRequest) {
+          return sendTextMessage(from, "You don't have any active reminders to mark done. 🎉");
         }
         if (targetIds.length === 0) {
-          return sendTextMessage(from, "Which reminder is done? Reply with the name or a number, e.g. \"done with gold exchange\".");
+          return sendTextMessage(from, "Which reminder is done? Reply with the name, e.g. \"done with gold exchange\".");
         }
+
         const completed = [];
         for (const id of targetIds) {
           const r = activeRems.find(rem => rem.id === id);
@@ -439,7 +443,11 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
           }
         }
         if (completed.length === 0) {
-          return sendTextMessage(from, "Couldn't find those reminders. Say \"list\" to see what's active.");
+          // AI returned IDs but none are currently active (stale)
+          if (activeRems.length === 0) {
+            return sendTextMessage(from, "You don't have any active reminders to mark done. 🎉");
+          }
+          return sendTextMessage(from, `Couldn't find those specific reminders. Your active ones:\n${activeRems.map(r => `  • ${r.text}`).join('\n')}\n\nReply "done with [name]" or "mark all as done".`);
         }
         if (completed.length === 1) return sendTextMessage(from, `✅ Done: "${completed[0]}"`);
         return sendTextMessage(from, `✅ Marked ${completed.length} as done:\n${completed.map(t => `  • ${t}`).join('\n')}`);
