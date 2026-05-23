@@ -120,6 +120,7 @@ Classify the message into one of these intents and return a JSON object:
    - "change soccer to basketball" → action=edit, match "soccer" to its ID, include newText
    - "delete the first one" → ids = [first reminder ID]
    - "done with dentist" or "finished the gym" or "completed the call" → action=complete, match by text, return its ID. This MARKS IT DONE (logs completion + deactivates), different from cancel.
+   - "mark all as done", "mark all reminders as done", "complete everything", "finish all tasks" → action=complete, ids = ALL active reminder IDs
    - "note: bring the documents" or "add note to factory reminder: need 15k" → action=add_note, match reminder, include note
    - If you can't determine which reminder, return: { "intent": "action", "needsInfo": "Which reminder? ..." }
 

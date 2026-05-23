@@ -419,28 +419,45 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         return;
       }
       if (aiResult.action === 'complete') {
-        for (const id of ids) {
+        // If AI returns no IDs but the message asks for "all", complete all active
+        let targetIds = ids;
+        if (targetIds.length === 0 && /\b(all|every|everything)\b/i.test(text)) {
+          targetIds = activeRems.map(r => r.id);
+        }
+        if (targetIds.length === 0) {
+          return sendTextMessage(from, "Which reminder is done? Reply with the name or a number, e.g. \"done with gold exchange\".");
+        }
+        const completed = [];
+        for (const id of targetIds) {
           const r = activeRems.find(rem => rem.id === id);
           if (r) {
             cancelReminder(id);
             await deactivateReminder(id);
             await logCompletedReminder({ chatId: from, text: r.text, remindAt: r.remind_at });
-            // Track streak for recurring
             if (r.cron_expr) { await updateStreak(from, r.text, r.cron_expr); }
-            await sendTextMessage(from, `Done: "${r.text}"`);
+            completed.push(r.text);
           }
         }
-        return;
+        if (completed.length === 0) {
+          return sendTextMessage(from, "Couldn't find those reminders. Say \"list\" to see what's active.");
+        }
+        if (completed.length === 1) return sendTextMessage(from, `✅ Done: "${completed[0]}"`);
+        return sendTextMessage(from, `✅ Marked ${completed.length} as done:\n${completed.map(t => `  • ${t}`).join('\n')}`);
       }
       if (aiResult.action === 'add_note') {
+        if (ids.length === 0) {
+          return sendTextMessage(from, "Which reminder should the note go on? Try: \"add note to gold exchange: bring receipt\".");
+        }
+        const added = [];
         for (const id of ids) {
           const r = activeRems.find(rem => rem.id === id);
           if (r && aiResult.note) {
             await addNoteToReminder(id, aiResult.note);
-            await sendTextMessage(from, `Note added to "${r.text}": ${aiResult.note}`);
+            added.push(r.text);
           }
         }
-        return;
+        if (added.length === 0) return sendTextMessage(from, "Couldn't find those reminders to add a note to.");
+        return sendTextMessage(from, `📝 Note added to ${added.length === 1 ? `"${added[0]}"` : `${added.length} reminders`}: ${aiResult.note}`);
       }
     }
 
