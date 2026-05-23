@@ -278,6 +278,7 @@ async function initPostgres() {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS shared_with TEXT`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS created_by TEXT`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS google_event_id TEXT`);
+    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
   } catch (e) { console.error('[DB] Migration:', e.message); }
@@ -456,6 +457,29 @@ export async function deactivateReminder(id) {
   await run('UPDATE reminders SET active = 0 WHERE id = ?', [id]);
 }
 
+// Marks a reminder as user-cancelled (sets active=0 AND timestamps the cancellation).
+// Used for the daily/weekly newsletter to distinguish cancellations from completions.
+export async function markReminderCancelled(id) {
+  await run('UPDATE reminders SET active = 0, cancelled_at = NOW() WHERE id = ?', [id]);
+}
+
+// Returns reminders added/completed/cancelled within a time window for the daily/weekly newsletter.
+export async function getActivitySummary(chatId, sinceISO) {
+  const added = (await query(
+    'SELECT id, text, remind_at, created_at FROM reminders WHERE chat_id = ? AND created_at >= ?::timestamptz ORDER BY created_at DESC',
+    [chatId, sinceISO]
+  )).rows;
+  const completed = (await query(
+    'SELECT text, completed_at, original_remind_at FROM completed_reminders WHERE chat_id = ? AND completed_at >= ?::timestamptz ORDER BY completed_at DESC',
+    [chatId, sinceISO]
+  )).rows;
+  const cancelled = (await query(
+    'SELECT id, text, remind_at, cancelled_at FROM reminders WHERE chat_id = ? AND cancelled_at >= ?::timestamptz ORDER BY cancelled_at DESC',
+    [chatId, sinceISO]
+  )).rows;
+  return { added, completed, cancelled };
+}
+
 export async function snoozeReminder(id, newTime) {
   await run('UPDATE reminders SET remind_at = ?, snoozed_until = ? WHERE id = ?', [newTime, newTime, id]);
 }
@@ -518,7 +542,7 @@ export async function getTodaysReminders(chatId, dateStr) {
 }
 
 export async function deactivateTodaysReminders(chatId, dateStr) {
-  const result = await run("UPDATE reminders SET active = 0 WHERE chat_id = ? AND active = 1 AND cron_expr IS NULL AND remind_at::date = ?::date", [chatId, dateStr]);
+  const result = await run("UPDATE reminders SET active = 0, cancelled_at = NOW() WHERE chat_id = ? AND active = 1 AND cron_expr IS NULL AND remind_at::date = ?::date", [chatId, dateStr]);
   return result.changes;
 }
 
@@ -530,7 +554,7 @@ export async function getMissedReminders() {
 }
 
 export async function deactivateAllReminders(chatId) {
-  const result = await run('UPDATE reminders SET active = 0 WHERE chat_id = ? AND active = 1', [chatId]);
+  const result = await run('UPDATE reminders SET active = 0, cancelled_at = NOW() WHERE chat_id = ? AND active = 1', [chatId]);
   return result.changes;
 }
 

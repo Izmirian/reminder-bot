@@ -13,6 +13,7 @@ import { parseReminderSmart, parseReminder, detectCategory } from '../parser.js'
 import { classifyIntent } from '../ai.js';
 import {
   createReminder, getActiveReminders, getReminder, deactivateReminder,
+  markReminderCancelled,
   deactivateAllReminders, deactivateTodaysReminders, pauseAllReminders,
   resumeAllReminders, getPausedReminders, getSettings, setTimezone,
   setDailyDigest, setLocation, setGoogleTokens, updateReminderText, updateReminderTime,
@@ -143,7 +144,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         }
         if (/^cancel$/i.test(lower)) {
           cancelReminder(reminderId);
-          await deactivateReminder(reminderId);
+          await markReminderCancelled(reminderId);
           return sendTextMessage(from, `Cancelled "${reminder.text}"`);
         }
 
@@ -153,7 +154,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         if (aiResult?.intent === 'action') {
           if (aiResult.action === 'cancel') {
             cancelReminder(reminderId);
-            await deactivateReminder(reminderId);
+            await markReminderCancelled(reminderId);
             return sendTextMessage(from, `Cancelled "${reminder.text}"`);
           }
           if (aiResult.action === 'reschedule' && aiResult.newTime) {
@@ -359,7 +360,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         const names = [];
         for (const id of ids) {
           const r = activeRems.find(rem => rem.id === id);
-          if (r) { cancelReminder(id); await deactivateReminder(id); names.push(r.text); }
+          if (r) { cancelReminder(id); await markReminderCancelled(id); names.push(r.text); }
         }
         if (names.length > 0) {
           return sendTextMessage(from, `✅ Cancelled: ${names.map(n => `"${n}"`).join(', ')}`);

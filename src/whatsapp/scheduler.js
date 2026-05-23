@@ -466,15 +466,43 @@ export function setupWhatsAppDigest() {
       for (const chatId of waChatIds) {
         const settings = await getSettings(chatId);
         if (!settings.daily_digest) continue;
-        const { getExpenseSummary, getActiveReminders: getActive } = await import('../db.js');
+        const { getExpenseSummary, getActiveReminders: getActive, getActivitySummary } = await import('../db.js');
         const active = await getActive(chatId);
         const todaySpend = await getExpenseSummary(chatId, 1);
         const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
         const tomorrowStr = tomorrow.toLocaleDateString('en-CA', { timeZone: settings.timezone });
         const tomorrowRems = await getTodaysReminders(chatId, tomorrowStr);
-        let msg = '*End of Day*\n';
-        if (todaySpend.count > 0) msg += `\nSpent today: *${todaySpend.total.toFixed(2)}*`;
-        msg += `\nPending: *${active.length}*`;
+
+        // Daily newsletter: what was added / completed / cancelled today
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const activity = await getActivitySummary(chatId, todayStart.toISOString());
+
+        let msg = '*📰 Daily Recap*\n';
+
+        // Activity section
+        const totals = activity.added.length + activity.completed.length + activity.cancelled.length;
+        if (totals > 0) {
+          msg += `\n*Today's reminders:*`;
+          msg += `\n  📅 Added: ${activity.added.length}  ✅ Completed: ${activity.completed.length}  ❌ Cancelled: ${activity.cancelled.length}`;
+          if (activity.added.length > 0) {
+            msg += `\n\n*Added:*`;
+            for (const r of activity.added.slice(0, 5)) msg += `\n  • ${r.text}`;
+            if (activity.added.length > 5) msg += `\n  …+${activity.added.length - 5} more`;
+          }
+          if (activity.completed.length > 0) {
+            msg += `\n\n*Completed:*`;
+            for (const r of activity.completed.slice(0, 5)) msg += `\n  • ${r.text}`;
+            if (activity.completed.length > 5) msg += `\n  …+${activity.completed.length - 5} more`;
+          }
+          if (activity.cancelled.length > 0) {
+            msg += `\n\n*Cancelled:*`;
+            for (const r of activity.cancelled.slice(0, 5)) msg += `\n  • ${r.text}`;
+            if (activity.cancelled.length > 5) msg += `\n  …+${activity.cancelled.length - 5} more`;
+          }
+        }
+
+        if (todaySpend.count > 0) msg += `\n\nSpent today: *${todaySpend.total.toFixed(2)}*`;
+        msg += `\nStill pending: *${active.length}*`;
         if (tomorrowRems.length > 0) {
           msg += `\n\n*Tomorrow (${tomorrowRems.length}):*`;
           for (const r of tomorrowRems) {
@@ -544,7 +572,7 @@ export function setupWhatsAppDigest() {
         if (!settings.daily_digest) continue;
 
         const stats = await import('../db.js').then(db => db.getWeeklyStats(chatId));
-        const { getExpenseSummary, getActiveReminders: getActive, getPendingFollowups, getJournalEntries, getAllStreaks } = await import('../db.js');
+        const { getExpenseSummary, getActiveReminders: getActive, getPendingFollowups, getJournalEntries, getAllStreaks, getActivitySummary } = await import('../db.js');
 
         const active = await getActive(chatId);
         const weekSpend = await getExpenseSummary(chatId, 7);
@@ -552,15 +580,35 @@ export function setupWhatsAppDigest() {
         const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
         const journal = await getJournalEntries(chatId, weekAgo, new Date().toISOString());
         const streaks = await getAllStreaks(chatId);
+        const activity = await getActivitySummary(chatId, weekAgo);
 
         let msg = '*📊 Weekly Review*\n';
 
         // Stats
         msg += `\n*This week:*`;
-        msg += `\n  ✅ ${stats.completed} completed`;
+        msg += `\n  📅 ${activity.added.length} added`;
+        msg += `\n  ✅ ${activity.completed.length} completed`;
+        msg += `\n  ❌ ${activity.cancelled.length} cancelled`;
         if (stats.snoozed > 0) msg += `\n  ⏰ ${stats.snoozed} snoozed`;
-        if (stats.missed > 0) msg += `\n  ❌ ${stats.missed} missed`;
+        if (stats.missed > 0) msg += `\n  ⚠️ ${stats.missed} missed`;
         msg += `\n  📋 ${active.length} still pending`;
+
+        // Activity detail (limit to keep message reasonable)
+        if (activity.added.length > 0) {
+          msg += `\n\n*Added this week (${activity.added.length}):*`;
+          for (const r of activity.added.slice(0, 7)) msg += `\n  • ${r.text}`;
+          if (activity.added.length > 7) msg += `\n  …+${activity.added.length - 7} more`;
+        }
+        if (activity.completed.length > 0) {
+          msg += `\n\n*Completed (${activity.completed.length}):*`;
+          for (const r of activity.completed.slice(0, 7)) msg += `\n  • ${r.text}`;
+          if (activity.completed.length > 7) msg += `\n  …+${activity.completed.length - 7} more`;
+        }
+        if (activity.cancelled.length > 0) {
+          msg += `\n\n*Cancelled (${activity.cancelled.length}):*`;
+          for (const r of activity.cancelled.slice(0, 7)) msg += `\n  • ${r.text}`;
+          if (activity.cancelled.length > 7) msg += `\n  …+${activity.cancelled.length - 7} more`;
+        }
 
         // Spending
         if (weekSpend.count > 0) {
