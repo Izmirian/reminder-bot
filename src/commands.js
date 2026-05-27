@@ -1,6 +1,6 @@
 import {
   getActiveReminders,
-  deactivateReminder,
+  deactivateReminder, markReminderCancelled,
   deactivateAllReminders,
   deactivateTodaysReminders,
   getTodaysReminders,
@@ -213,7 +213,7 @@ export async function handleCancel(bot, msg, match) {
   }
 
   cancelReminder(id);
-  await deactivateReminder(id);
+  await markReminderCancelled(id);
   bot.sendMessage(chatId, `✅ Cancelled: "${reminder.text}"`);
 }
 

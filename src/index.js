@@ -2,7 +2,7 @@ import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import {
   createReminder, getSettings, getReminder, getActiveReminders,
-  snoozeReminder as dbSnooze, deactivateReminder, addNoteToReminder,
+  snoozeReminder as dbSnooze, deactivateReminder, markReminderCancelled, addNoteToReminder,
   attachMedia, getLastReminder, searchReminders,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder, resetFireCount,
@@ -204,7 +204,7 @@ bot.on('callback_query', async (query) => {
     const reminderId = parseInt(data.split(':')[1], 10);
     const reminder = await getReminder(reminderId);
     cancelReminder(reminderId);
-    await deactivateReminder(reminderId);
+    await markReminderCancelled(reminderId);
     await resetSnoozeCount(reminderId);
     await clearIgnoredSince(reminderId);
 
@@ -367,7 +367,7 @@ bot.on('message', async (msg) => {
             const ids = aiResult.ids || [reminderId];
             if (aiResult.action === 'cancel') {
               cancelReminder(reminderId);
-              await deactivateReminder(reminderId);
+              await markReminderCancelled(reminderId);
               bot.sendMessage(chatId, `Cancelled "${reminder.text}"`);
               return;
             }
@@ -421,7 +421,7 @@ bot.on('message', async (msg) => {
         }
         if (/^cancel$/i.test(lower)) {
           cancelReminder(reminderId);
-          await deactivateReminder(reminderId);
+          await markReminderCancelled(reminderId);
           bot.sendMessage(chatId, `Cancelled "${reminder.text}"`);
           return;
         }
@@ -610,7 +610,7 @@ bot.on('message', async (msg) => {
         const names = [];
         for (const id of ids) {
           const r = activeReminders.find(rem => rem.id === id);
-          if (r) { cancelReminder(id); await deactivateReminder(id); names.push(r.text); }
+          if (r) { cancelReminder(id); await markReminderCancelled(id); names.push(r.text); }
         }
         if (names.length > 0) {
           bot.sendMessage(chatId, `✅ Cancelled: ${names.map(n => `"${n}"`).join(', ')}`);

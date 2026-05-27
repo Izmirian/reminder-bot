@@ -350,9 +350,35 @@ export function setupDailyDigest() {
         const { getTodaysReminders } = await import('./db.js');
         const tomorrowRems = await getTodaysReminders(chatId, tomorrowStr);
 
-        let msg = '*End of Day*\n';
-        if (todaySpend.count > 0) msg += `\nSpent today: *${todaySpend.total.toFixed(2)}* (${todaySpend.count} transactions)`;
-        msg += `\nPending reminders: *${active.length}*`;
+        // Activity: what was added / completed / cancelled today
+        const { getActivitySummary } = await import('./db.js');
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const activity = await getActivitySummary(chatId, todayStart.toISOString());
+
+        let msg = '*📰 Daily Recap*\n';
+        const totalAct = activity.added.length + activity.completed.length + activity.cancelled.length;
+        if (totalAct > 0) {
+          msg += `\n*Today's reminders:*`;
+          msg += `\n  📅 Added: ${activity.added.length}  ✅ Completed: ${activity.completed.length}  ❌ Cancelled: ${activity.cancelled.length}`;
+          if (activity.added.length > 0) {
+            msg += `\n\n*Added:*`;
+            for (const r of activity.added.slice(0, 5)) msg += `\n  • ${r.text}`;
+            if (activity.added.length > 5) msg += `\n  …+${activity.added.length - 5} more`;
+          }
+          if (activity.completed.length > 0) {
+            msg += `\n\n*Completed:*`;
+            for (const r of activity.completed.slice(0, 5)) msg += `\n  • ${r.text}`;
+            if (activity.completed.length > 5) msg += `\n  …+${activity.completed.length - 5} more`;
+          }
+          if (activity.cancelled.length > 0) {
+            msg += `\n\n*Cancelled:*`;
+            for (const r of activity.cancelled.slice(0, 5)) msg += `\n  • ${r.text}`;
+            if (activity.cancelled.length > 5) msg += `\n  …+${activity.cancelled.length - 5} more`;
+          }
+        }
+
+        if (todaySpend.count > 0) msg += `\n\nSpent today: *${todaySpend.total.toFixed(2)}* (${todaySpend.count} transactions)`;
+        msg += `\nStill pending: *${active.length}*`;
         if (tomorrowRems.length > 0) {
           msg += `\n\n*Tomorrow (${tomorrowRems.length}):*`;
           for (const r of tomorrowRems) {
@@ -621,22 +647,50 @@ export function setupDailyDigest() {
     const chatIds = [...new Set(allReminders.map(r => r.chat_id))];
 
     for (const chatId of chatIds) {
+      // Only Telegram chat ids
+      if (chatId.length >= 10 && /^\d+$/.test(chatId)) continue;
       const stats = await getWeeklyStats(chatId);
       const active = await getActiveReminders(chatId);
-      const total = stats.completed + stats.snoozed + stats.missed;
-      if (total === 0) continue;
+      const { getActivitySummary } = await import('./db.js');
+      const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+      const activity = await getActivitySummary(chatId, weekAgo);
 
-      const rate = Math.round((stats.completed / total) * 100);
+      const total = activity.added.length + activity.completed.length + activity.cancelled.length;
+      if (total === 0 && stats.completed + stats.snoozed + stats.missed === 0) continue;
+
+      const rate = stats.completed + stats.missed > 0
+        ? Math.round((stats.completed / (stats.completed + stats.missed)) * 100)
+        : 100;
       let emoji = '💪';
       if (rate >= 80) emoji = '🏆';
       else if (rate >= 50) emoji = '👍';
 
-      const msg = `📊 *Weekly Summary*\n\n` +
-        `✅ Completed: *${stats.completed}*\n` +
-        `⏰ Snoozed: *${stats.snoozed}*\n` +
-        `❌ Missed: *${stats.missed}*\n` +
-        `📝 Active: *${active.length}*\n\n` +
-        `${emoji} ${rate}% completion rate. Keep it up!`;
+      let msg = `📊 *Weekly Summary*\n\n`;
+      msg += `*This week:*\n`;
+      msg += `  📅 Added: *${activity.added.length}*\n`;
+      msg += `  ✅ Completed: *${activity.completed.length}*\n`;
+      msg += `  ❌ Cancelled: *${activity.cancelled.length}*\n`;
+      if (stats.snoozed > 0) msg += `  ⏰ Snoozed: *${stats.snoozed}*\n`;
+      if (stats.missed > 0) msg += `  ⚠️ Missed: *${stats.missed}*\n`;
+      msg += `  📋 Still pending: *${active.length}*\n`;
+
+      if (activity.added.length > 0) {
+        msg += `\n*Added (${activity.added.length}):*`;
+        for (const r of activity.added.slice(0, 7)) msg += `\n  • ${r.text}`;
+        if (activity.added.length > 7) msg += `\n  …+${activity.added.length - 7} more`;
+      }
+      if (activity.completed.length > 0) {
+        msg += `\n\n*Completed (${activity.completed.length}):*`;
+        for (const r of activity.completed.slice(0, 7)) msg += `\n  • ${r.text}`;
+        if (activity.completed.length > 7) msg += `\n  …+${activity.completed.length - 7} more`;
+      }
+      if (activity.cancelled.length > 0) {
+        msg += `\n\n*Cancelled (${activity.cancelled.length}):*`;
+        for (const r of activity.cancelled.slice(0, 7)) msg += `\n  • ${r.text}`;
+        if (activity.cancelled.length > 7) msg += `\n  …+${activity.cancelled.length - 7} more`;
+      }
+
+      msg += `\n\n${emoji} ${rate}% completion rate. Keep it up!`;
 
       try {
         await botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
