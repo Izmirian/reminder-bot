@@ -425,7 +425,9 @@ export async function getReminder(id) {
 }
 
 export async function reactivateReminder(id) {
-  await run('UPDATE reminders SET active = 1 WHERE id = ?', [id]);
+  // Clear cancelled_at so a re-activated reminder doesn't double-count
+  // as both "active" and "cancelled" in the activity newsletter.
+  await run('UPDATE reminders SET active = 1, cancelled_at = NULL WHERE id = ?', [id]);
 }
 
 export async function getLastDeactivated(chatId) {
