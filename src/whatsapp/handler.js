@@ -357,15 +357,25 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
       }
       const ids = aiResult.ids || [];
       if (aiResult.action === 'cancel') {
+        // For "cancel all/everything", use the active list as source of truth (AI ids may be stale)
+        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const targetIds = isBulkRequest ? activeRems.map(r => r.id) : ids;
+        if (targetIds.length === 0 && isBulkRequest) {
+          return sendTextMessage(from, "You don't have any active reminders to cancel.");
+        }
+        if (targetIds.length === 0) {
+          return sendTextMessage(from, "Which reminder should I cancel? Try \"cancel gold exchange\" or \"cancel all\".");
+        }
         const names = [];
-        for (const id of ids) {
+        for (const id of targetIds) {
           const r = activeRems.find(rem => rem.id === id);
           if (r) { cancelReminder(id); await markReminderCancelled(id); names.push(r.text); }
         }
-        if (names.length > 0) {
-          return sendTextMessage(from, `✅ Cancelled: ${names.map(n => `"${n}"`).join(', ')}`);
+        if (names.length === 0) {
+          return sendTextMessage(from, `Couldn't find those reminders. Active:\n${activeRems.map(r => `  • ${r.text}`).join('\n') || '  (none)'}`);
         }
-        return sendTextMessage(from, "Couldn't find those reminders.");
+        if (names.length === 1) return sendTextMessage(from, `❌ Cancelled "${names[0]}"`);
+        return sendTextMessage(from, `❌ Cancelled ${names.length} reminders:\n${names.map(n => `  • ${n}`).join('\n')}`);
       }
       if (aiResult.action === 'reschedule') {
         try {

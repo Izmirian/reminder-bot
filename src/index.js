@@ -607,16 +607,27 @@ bot.on('message', async (msg) => {
       }
       const ids = aiResult.ids || [];
       if (aiResult.action === 'cancel') {
+        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const targetIds = isBulkRequest ? activeReminders.map(r => r.id) : ids;
+        if (targetIds.length === 0 && isBulkRequest) {
+          bot.sendMessage(chatId, "You don't have any active reminders to cancel.");
+          return;
+        }
+        if (targetIds.length === 0) {
+          bot.sendMessage(chatId, "Which reminder should I cancel? Try \"cancel gold exchange\" or \"cancel all\".");
+          return;
+        }
         const names = [];
-        for (const id of ids) {
+        for (const id of targetIds) {
           const r = activeReminders.find(rem => rem.id === id);
           if (r) { cancelReminder(id); await markReminderCancelled(id); names.push(r.text); }
         }
-        if (names.length > 0) {
-          bot.sendMessage(chatId, `✅ Cancelled: ${names.map(n => `"${n}"`).join(', ')}`);
-        } else {
-          bot.sendMessage(chatId, "Couldn't find those reminders.");
+        if (names.length === 0) {
+          bot.sendMessage(chatId, `Couldn't find those reminders. Active:\n${activeReminders.map(r => `  • ${r.text}`).join('\n') || '  (none)'}`);
+          return;
         }
+        if (names.length === 1) bot.sendMessage(chatId, `❌ Cancelled "${names[0]}"`);
+        else bot.sendMessage(chatId, `❌ Cancelled ${names.length} reminders:\n${names.map(n => `  • ${n}`).join('\n')}`);
         return;
       }
       if (aiResult.action === 'reschedule') {
