@@ -668,24 +668,91 @@ bot.on('message', async (msg) => {
         return;
       }
       if (aiResult.action === 'edit') {
+        if (ids.length === 0) {
+          bot.sendMessage(chatId, "Which reminder should I edit? Try: \"change gold exchange to silver exchange\".");
+          return;
+        }
+        if (!aiResult.newText) {
+          bot.sendMessage(chatId, "What should I change it to? Try: \"change [reminder] to [new text]\".");
+          return;
+        }
+        const { updateReminderText: updateText } = await import('./db.js');
+        const updated = [];
         for (const id of ids) {
           const r = activeReminders.find(rem => rem.id === id);
-          if (r && aiResult.newText) {
-            const { updateReminderText: updateText } = await import('./db.js');
+          if (r) {
             await updateText(id, aiResult.newText);
-            bot.sendMessage(chatId, `✅ Updated #${id}: "${aiResult.newText}"`);
+            updated.push(r.text);
           }
         }
+        if (updated.length === 0) {
+          bot.sendMessage(chatId, `Couldn't find those reminders to edit. Active:\n${activeReminders.map(r => `  • ${r.text}`).join('\n') || '  (none)'}`);
+          return;
+        }
+        if (updated.length === 1) bot.sendMessage(chatId, `✅ Updated "${updated[0]}" → "${aiResult.newText}"`);
+        else bot.sendMessage(chatId, `✅ Updated ${updated.length} reminders to "${aiResult.newText}"`);
         return;
       }
       if (aiResult.action === 'add_note') {
+        if (ids.length === 0) {
+          bot.sendMessage(chatId, "Which reminder should the note go on? Try: \"add note to gold exchange: bring receipt\".");
+          return;
+        }
+        if (!aiResult.note) {
+          bot.sendMessage(chatId, "What's the note? Try: \"note: bring documents\" while replying to a reminder.");
+          return;
+        }
+        const noted = [];
         for (const id of ids) {
           const r = activeReminders.find(rem => rem.id === id);
-          if (r && aiResult.note) {
+          if (r) {
             await addNoteToReminder(id, aiResult.note);
-            bot.sendMessage(chatId, `📝 Note added to "${r.text}": ${aiResult.note}`);
+            noted.push(r.text);
           }
         }
+        if (noted.length === 0) {
+          bot.sendMessage(chatId, "Couldn't find those reminders to add a note to.");
+          return;
+        }
+        bot.sendMessage(chatId, `📝 Note added to ${noted.length === 1 ? `"${noted[0]}"` : `${noted.length} reminders`}: ${aiResult.note}`);
+        return;
+      }
+
+      if (aiResult.action === 'complete') {
+        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        let targetIds = isBulkRequest ? activeReminders.map(r => r.id) : ids;
+
+        if (targetIds.length === 0 && isBulkRequest) {
+          bot.sendMessage(chatId, "You don't have any active reminders to mark done. 🎉");
+          return;
+        }
+        if (targetIds.length === 0) {
+          bot.sendMessage(chatId, "Which reminder is done? Reply with the name, e.g. \"done with gold exchange\".");
+          return;
+        }
+
+        const { logCompletedReminder: logCompleted, updateStreak: updateStr } = await import('./db.js');
+        const completed = [];
+        for (const id of targetIds) {
+          const r = activeReminders.find(rem => rem.id === id);
+          if (r) {
+            cancelReminder(id);
+            await deactivateReminder(id);
+            await logCompleted({ chatId: String(chatId), text: r.text, remindAt: r.remind_at });
+            if (r.cron_expr) { await updateStr(String(chatId), r.text, r.cron_expr); }
+            completed.push(r.text);
+          }
+        }
+        if (completed.length === 0) {
+          if (activeReminders.length === 0) {
+            bot.sendMessage(chatId, "You don't have any active reminders to mark done. 🎉");
+          } else {
+            bot.sendMessage(chatId, `Couldn't find those specific reminders. Your active ones:\n${activeReminders.map(r => `  • ${r.text}`).join('\n')}`);
+          }
+          return;
+        }
+        if (completed.length === 1) bot.sendMessage(chatId, `✅ Done: "${completed[0]}"`);
+        else bot.sendMessage(chatId, `✅ Marked ${completed.length} as done:\n${completed.map(t => `  • ${t}`).join('\n')}`);
         return;
       }
     }

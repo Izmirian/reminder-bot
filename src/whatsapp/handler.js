@@ -410,14 +410,25 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         }
       }
       if (aiResult.action === 'edit') {
+        if (ids.length === 0) {
+          return sendTextMessage(from, "Which reminder should I edit? Try: \"change gold exchange to silver exchange\".");
+        }
+        if (!aiResult.newText) {
+          return sendTextMessage(from, "What should I change the reminder to? Try: \"change [reminder] to [new text]\".");
+        }
+        const updated = [];
         for (const id of ids) {
           const r = activeRems.find(rem => rem.id === id);
-          if (r && aiResult.newText) {
+          if (r) {
             await updateReminderText(id, aiResult.newText);
-            await sendTextMessage(from, `✅ Updated #${id}: "${aiResult.newText}"`);
+            updated.push(r.text);
           }
         }
-        return;
+        if (updated.length === 0) {
+          return sendTextMessage(from, `Couldn't find those reminders to edit. Active:\n${activeRems.map(r => `  • ${r.text}`).join('\n') || '  (none)'}`);
+        }
+        if (updated.length === 1) return sendTextMessage(from, `✅ Updated "${updated[0]}" → "${aiResult.newText}"`);
+        return sendTextMessage(from, `✅ Updated ${updated.length} reminders to "${aiResult.newText}"`);
       }
       if (aiResult.action === 'complete') {
         const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
