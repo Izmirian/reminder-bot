@@ -25,6 +25,13 @@ if (missing.length > 0) {
   console.warn(`[Startup] Missing env vars: ${missing.join(', ')} — some features may not work`);
 }
 
+// Reliability monitoring — external heartbeat + internal DB self-check.
+// Both no-op if their env vars (HEALTHCHECK_URL / WHATSAPP_TO_NUMBER) are unset.
+import('./src/monitor.js').then(({ startHeartbeat, startSelfCheck }) => {
+  startHeartbeat();
+  startSelfCheck();
+}).catch(e => console.error('[Startup] Monitor failed to start:', e.message));
+
 // Graceful shutdown — Railway sends SIGTERM before killing
 async function shutdown(signal) {
   console.log(`[Shutdown] ${signal} received — cleaning up...`);

@@ -26,6 +26,8 @@ async function initPostgres() {
   // Prevent crashes from idle connection drops
   pool.on('error', (err) => {
     console.error('[DB] Pool error (connection will be retried):', err.message);
+    // Surface to the reliability monitor (best-effort, never throws)
+    import('./monitor.js').then(m => m.signalDbError(err.message)).catch(() => {});
   });
 
   await pool.query(`
@@ -290,6 +292,14 @@ async function initPostgres() {
 // Graceful shutdown — close pool
 export async function closePool() {
   if (pool) { await pool.end(); console.log('[DB] Pool closed'); }
+}
+
+// Lightweight DB health probe for the self-check monitor.
+// Returns true if a trivial query succeeds, throws otherwise.
+export async function pingDb() {
+  if (!isPostgres && !sqliteDb) throw new Error('DB not initialized');
+  await query('SELECT 1');
+  return true;
 }
 
 async function initSqlite() {

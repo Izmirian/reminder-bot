@@ -13,7 +13,7 @@
     "start:whatsapp": "node src/whatsapp/index.js",
     "dev:telegram": "node --watch src/index.js",
     "dev:whatsapp": "node --watch src/whatsapp/index.js",
-    "test": "echo \"No tests configured yet\""
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",

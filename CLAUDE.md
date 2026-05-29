@@ -30,6 +30,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | `src/whatsapp/api.js` | WhatsApp Cloud API client — fetchWithRetry (exponential backoff), send text/buttons/images, mark read, upload/download media (20MB cap) |
 | `src/google-calendar.js` | Google Calendar OAuth2, event CRUD, two-way sync, transient retry on 5xx |
 | `src/url-monitor.js` | URL change/price monitoring with content hashing |
+| `src/monitor.js` | Reliability monitoring — external heartbeat (HEALTHCHECK_URL) + internal DB self-check that alerts owner via WhatsApp |
 | `src/parser.js` | chrono-node fallback date parser with `looksLikeReminder()` gate |
 | `src/commands.js` | Telegram slash command handlers |
 | `src/context.js` | Reminder fire message builder (priority-aware) |
@@ -150,7 +151,15 @@ DATABASE_URL (Railway Postgres reference)
 TIMEZONE=Asia/Amman
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
+HEALTHCHECK_URL (optional — external dead-man's-switch ping target, e.g. healthchecks.io)
 ```
+
+## Reliability & CI
+
+- **External heartbeat:** `src/monitor.js` `startHeartbeat()` pings `HEALTHCHECK_URL` every 2 min. If the process crashes/loops, pings stop and the external service (healthchecks.io) alerts the owner. No-op if unset.
+- **Internal self-check:** `startSelfCheck()` probes the DB every 5 min; after 2 consecutive failures it texts the owner (`WHATSAPP_TO_NUMBER`) via WhatsApp, with a 30-min cooldown, and sends a recovery note when the DB returns.
+- **Tests:** `npm test` runs `node --test test/*.test.js`. Pure-logic tests (`test/handlers.test.js`) always run; DB smoke tests (`test/db.test.js`) only run when `DATABASE_URL` is set.
+- **CI:** `.github/workflows/ci.yml` runs on push/PR against a **postgres:18** service container — catches PG18 type-coercion bugs that local SQLite never sees.
 
 ## User Preferences
 

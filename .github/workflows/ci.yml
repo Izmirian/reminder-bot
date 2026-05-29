@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Match production: Postgres 18 (Railway uses postgres-ssl:18).
+    # This is what catches PG18-specific type-coercion bugs that the
+    # local SQLite path never exercises.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: bot
+          POSTGRES_PASSWORD: bot
+          POSTGRES_DB: bot_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests against Postgres 18
+        env:
+          DATABASE_URL: postgresql://bot:bot@localhost:5432/bot_test
+        run: npm test
