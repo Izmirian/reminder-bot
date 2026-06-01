@@ -246,6 +246,13 @@ Classify the message into one of these intents and return a JSON object:
    - "did the deploy succeed?" → query="deploy status"
    - "list the src folder" → query="list src"
 
+20. **"idea"** — The user is jotting down a free-form thought, idea, note, brainstorm, or observation they want to keep and connect in their idea graph — NOT a task with a time, NOT a fact about themselves, NOT a conversational question expecting a reply.
+   Return: { "intent": "idea", "text": "the idea text, cleaned up" }
+   - "what if a bot could turn my notes into a knowledge graph" → text="what if a bot could turn my notes into a knowledge graph"
+   - "interesting how morning routines compound over time" → text="interesting how morning routines compound over time"
+   - "thought: scarcity drives most of my bad decisions" → text="scarcity drives most of my bad decisions"
+   - Prefer a more specific intent when one clearly applies: a task with a time = reminder; "remember [fact about me]" = memory; a daily diary entry = journal; spending = expense. Use "idea" for standalone thoughts/ideas the user is capturing to revisit later.
+
 Time-of-day phrases (these provide a specific time):
 - "morning" = 9:00 AM, "afternoon" = 2:00 PM, "evening" = 7:00 PM, "tonight" = 9:00 PM
 - "after lunch" = 1:00 PM, "after work" = 6:00 PM, "end of day" = 5:00 PM

@@ -32,6 +32,7 @@ import {
 } from './scheduler.js';
 import { detectRecurringPattern } from '../patterns.js';
 import { getConversationalResponse } from '../conversation.js';
+import { forwardToThoughts, thoughtsEnabled } from '../thoughts-forward.js';
 import {
   handleListIntent, handleContactIntent, handleJournalIntent,
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
@@ -124,6 +125,26 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       userQueues.delete(first);
     }
   }
+}
+
+// Build the WhatsApp reply for an idea captured into the Thoughts graph.
+function ideaCapturedReply(result) {
+  if (!result?.ok) return '💡 Noted, but the idea graph is unreachable right now.';
+  if (result.linkedCount > 0) {
+    return `💡 Captured — linked to ${result.linkedCount} related thought${result.linkedCount > 1 ? 's' : ''}.`;
+  }
+  return '💡 Captured.';
+}
+
+// Detect an explicit idea-capture prefix ("idea:", "thought:", or a leading #).
+// Returns the cleaned idea text, or null. ("note:" is intentionally left to the
+// pin intent to preserve existing behavior.)
+function extractIdeaPrefix(text) {
+  const t = text.trim();
+  const m = t.match(/^(?:idea|thought)\s*:\s*([\s\S]+)/i);
+  if (m) return m[1].trim();
+  if (t.startsWith('#') && t.length > 1) return t.slice(1).trim();
+  return null;
 }
 
 async function _handleTextMessage(from, text, quotedMsgId = null) {
@@ -286,6 +307,15 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
   if (lower.startsWith('/edit')) return handleEdit(from, text.trim());
   if (lower.startsWith('/timezone') || lower.startsWith('timezone ')) return handleTimezone(from, text.trim());
   if (lower.startsWith('/digest') || lower.startsWith('digest ')) return handleDigest(from, text.trim());
+
+  // Explicit idea capture ("idea:", "thought:", "#…") — always goes to the graph.
+  if (thoughtsEnabled()) {
+    const ideaText = extractIdeaPrefix(text);
+    if (ideaText) {
+      const result = await forwardToThoughts({ chatId: from, text: ideaText, source: 'whatsapp', sourceType: 'text' });
+      return sendTextMessage(from, ideaCapturedReply(result));
+    }
+  }
 
   // --- AI-first intent classification ---
   const settings = await getSettings(from);
@@ -538,6 +568,17 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     if (aiResult.intent === 'contact') return sendTextMessage(from, await handleContactIntent(from, aiResult));
     if (aiResult.intent === 'journal') return sendTextMessage(from, await handleJournalIntent(from, aiResult, settings.timezone));
     if (aiResult.intent === 'memory') return sendTextMessage(from, await handleMemoryIntent(from, aiResult));
+    if (aiResult.intent === 'idea') {
+      const ideaText = aiResult.text || text.trim();
+      if (thoughtsEnabled()) {
+        const result = await forwardToThoughts({ chatId: from, text: ideaText, source: 'whatsapp', sourceType: 'text' });
+        return sendTextMessage(from, ideaCapturedReply(result));
+      }
+      // Graph not configured — keep the thought as a pin so nothing is lost.
+      const { addPin } = await import('../db.js');
+      await addPin(from, ideaText);
+      return sendTextMessage(from, '💡 Saved.');
+    }
     if (aiResult.intent === 'expense') return sendTextMessage(from, await handleExpenseIntent(from, aiResult));
     if (aiResult.intent === 'timer') return sendTextMessage(from, handleTimerIntent(from, aiResult, (msg) => sendTextMessage(from, msg)));
     if (aiResult.intent === 'summarize') return sendTextMessage(from, await handleSummarizeIntent(aiResult.url, from));
@@ -1014,6 +1055,18 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
     const mediaUrl = await getMediaUrl(waMediaId);
     if (mediaUrl) {
       imageBuffer = await downloadMedia(mediaUrl);
+    }
+
+    // Explicit idea capture for a photo ("idea: …"/"#…" caption) → idea graph.
+    if (caption && imageBuffer && thoughtsEnabled()) {
+      const ideaCaption = extractIdeaPrefix(caption);
+      if (ideaCaption !== null) {
+        const result = await forwardToThoughts({
+          chatId: from, text: ideaCaption, mediaBuffer: imageBuffer, mediaMime: mimeType,
+          source: 'whatsapp', sourceType: 'image',
+        });
+        return sendTextMessage(from, ideaCapturedReply(result));
+      }
     }
 
     // Check if user wants to analyze/read the image
