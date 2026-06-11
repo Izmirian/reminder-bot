@@ -108,14 +108,18 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
   entry.processing = true;
   entry.startedAt = Date.now();
   try {
-    await _handleTextMessage(from, text, quotedMsgId);
-    // Process queued messages FIFO
-    while (entry.queue.length > 0) {
-      const next = entry.queue.shift();
-      await _handleTextMessage(from, next.text, next.quotedMsgId);
+    // Process this message, then drain the queue FIFO. Errors are isolated
+    // per-message so one failure (e.g. a WhatsApp API send error) can't strand
+    // the messages queued behind it.
+    let current = { text, quotedMsgId };
+    while (current) {
+      try {
+        await _handleTextMessage(from, current.text, current.quotedMsgId);
+      } catch (err) {
+        console.error(`[Handler] Error processing message from ${from}:`, err.message);
+      }
+      current = entry.queue.shift() || null;
     }
-  } catch (err) {
-    console.error(`[Handler] Error processing message from ${from}:`, err.message);
   } finally {
     entry.processing = false;
     entry.startedAt = 0;
