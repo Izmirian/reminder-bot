@@ -32,7 +32,7 @@ import {
 } from './scheduler.js';
 import { detectRecurringPattern } from '../patterns.js';
 import { getConversationalResponse } from '../conversation.js';
-import { forwardToThoughts, thoughtsEnabled } from '../thoughts-forward.js';
+import { forwardToThoughts, thoughtsEnabled, chatAllowed } from '../thoughts-forward.js';
 import {
   handleListIntent, handleContactIntent, handleJournalIntent,
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
@@ -312,8 +312,9 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
   if (lower.startsWith('/timezone') || lower.startsWith('timezone ')) return handleTimezone(from, text.trim());
   if (lower.startsWith('/digest') || lower.startsWith('digest ')) return handleDigest(from, text.trim());
 
-  // Explicit idea capture ("idea:", "thought:", "#…") — always goes to the graph.
-  if (thoughtsEnabled()) {
+  // Explicit idea capture ("idea:", "thought:", "#…") — always goes to the graph
+  // (only for allowed senders; others fall through to normal handling).
+  if (thoughtsEnabled() && chatAllowed(from)) {
     const ideaText = extractIdeaPrefix(text);
     if (ideaText) {
       const result = await forwardToThoughts({ chatId: from, text: ideaText, source: 'whatsapp', sourceType: 'text' });
@@ -572,7 +573,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     if (aiResult.intent === 'contact') return sendTextMessage(from, await handleContactIntent(from, aiResult));
     if (aiResult.intent === 'journal') return sendTextMessage(from, await handleJournalIntent(from, aiResult, settings.timezone));
     if (aiResult.intent === 'memory') return sendTextMessage(from, await handleMemoryIntent(from, aiResult));
-    if (aiResult.intent === 'idea') {
+    if (aiResult.intent === 'idea' && chatAllowed(from)) {
       const ideaText = aiResult.text || text.trim();
       if (thoughtsEnabled()) {
         const result = await forwardToThoughts({ chatId: from, text: ideaText, source: 'whatsapp', sourceType: 'text' });
@@ -1062,7 +1063,7 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
     }
 
     // Explicit idea capture for a photo ("idea: …"/"#…" caption) → idea graph.
-    if (caption && imageBuffer && thoughtsEnabled()) {
+    if (caption && imageBuffer && thoughtsEnabled() && chatAllowed(from)) {
       const ideaCaption = extractIdeaPrefix(caption);
       if (ideaCaption !== null) {
         const result = await forwardToThoughts({

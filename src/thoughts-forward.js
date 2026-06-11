@@ -7,8 +7,22 @@
 const INGEST_URL = process.env.THOUGHTS_INGEST_URL;
 const INGEST_SECRET = process.env.THOUGHTS_INGEST_SECRET;
 
+// Only forward ideas from these chat ids. Defaults to the owner's own number
+// (WHATSAPP_TO_NUMBER) so that a stranger texting the business number can't inject
+// content into the personal idea graph (and thus can't reach the viewer at all).
+// Set THOUGHTS_ALLOWED_CHATS (comma-separated) to allow more; leave both unset to
+// forward from everyone (open deployment).
+const ALLOWED_CHATS = (process.env.THOUGHTS_ALLOWED_CHATS || process.env.WHATSAPP_TO_NUMBER || '')
+  .split(',').map(s => s.replace(/\D/g, '')).filter(Boolean);
+
 export function thoughtsEnabled() {
   return !!(INGEST_URL && INGEST_SECRET);
+}
+
+/** Whether a chat id is allowed to feed the idea graph. */
+export function chatAllowed(chatId) {
+  if (!ALLOWED_CHATS.length) return true; // no allowlist configured
+  return ALLOWED_CHATS.includes(String(chatId).replace(/\D/g, ''));
 }
 
 /**
@@ -26,6 +40,7 @@ export function thoughtsEnabled() {
 export async function forwardToThoughts({ chatId, text = null, mediaBuffer = null, mediaMime = null,
   source = 'whatsapp', sourceType = 'text', sourceRef = null }, retries = 3) {
   if (!thoughtsEnabled()) return null;
+  if (!chatAllowed(chatId)) return null; // ignore non-owner senders
 
   const body = {
     chatId, text, source, sourceType, sourceRef,
