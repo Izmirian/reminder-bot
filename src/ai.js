@@ -262,6 +262,8 @@ Smart time phrases:
 - "after this meeting" or "after my meeting" → return remindAt as "AFTER_MEETING" (handler will check calendar for next event end time)
 - "after work" = 6:00 PM (already defined above)
 
+Bare hour without AM/PM (e.g. "at 9", "at 7 to call mom"): resolve to the NEXT upcoming occurrence of that hour relative to the current local time. If it's currently 2:00 PM, "at 9" means 9:00 PM today; if it's currently 10:00 PM, "at 9" means 9:00 AM tomorrow. Always state the resolved time so the user can correct it. Do NOT silently default a bare hour to AM.
+
 INVALID (day/date ONLY — no time specified, must ask for time):
 - "tomorrow" alone → needsInfo: "What time tomorrow?"
 - "Monday" alone → needsInfo: "What time on Monday?"

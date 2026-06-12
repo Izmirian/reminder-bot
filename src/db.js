@@ -281,6 +281,9 @@ async function initPostgres() {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS created_by TEXT`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS google_event_id TEXT`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+    // Purge legacy 'null'-string google_tokens (written before the NULL fix) so
+    // disconnected users stop being scanned by the calendar sync crons.
+    await pool.query(`UPDATE settings SET google_tokens = NULL WHERE google_tokens = 'null'`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
   } catch (e) { console.error('[DB] Migration:', e.message); }
@@ -518,12 +521,16 @@ export async function setTimezone(chatId, timezone) {
 
 export async function setGoogleTokens(chatId, tokens) {
   await getSettings(chatId);
-  await run('UPDATE settings SET google_tokens = ? WHERE chat_id = ?', [JSON.stringify(tokens), chatId]);
+  // Pass real SQL NULL when clearing — JSON.stringify(null) is the string 'null',
+  // which is NOT SQL NULL and would keep the user in getUsersWithGoogleTokens forever.
+  await run('UPDATE settings SET google_tokens = ? WHERE chat_id = ?', [tokens ? JSON.stringify(tokens) : null, chatId]);
 }
 
 export async function getGoogleTokens(chatId) {
   const settings = await getSettings(chatId);
-  return settings.google_tokens ? JSON.parse(settings.google_tokens) : null;
+  // Guard against the legacy 'null' string poison written before the fix above.
+  if (!settings.google_tokens || settings.google_tokens === 'null') return null;
+  return JSON.parse(settings.google_tokens);
 }
 
 export async function setGoogleEventId(reminderId, eventId) {
@@ -531,7 +538,7 @@ export async function setGoogleEventId(reminderId, eventId) {
 }
 
 export async function getUsersWithGoogleTokens() {
-  return (await query("SELECT * FROM settings WHERE google_tokens IS NOT NULL")).rows;
+  return (await query("SELECT * FROM settings WHERE google_tokens IS NOT NULL AND google_tokens <> 'null'")).rows;
 }
 
 export async function setLocation(chatId, location) {

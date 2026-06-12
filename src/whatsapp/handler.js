@@ -100,21 +100,31 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
   if (entry.processing) {
     if (entry.queue.length < 5) { // Cap queue to prevent abuse
       entry.queue.push({ text, quotedMsgId });
+    } else {
+      // Queue full — don't silently swallow; tell the user we're behind.
+      sendTextMessage(from, "I'm still working through your earlier messages — one sec.").catch(() => {});
     }
     return;
   }
 
   entry.processing = true;
   entry.startedAt = Date.now();
+  // Run one message with its own guard so a failure can't strand the queue or go silent.
+  const runOne = async (msgText, quoted) => {
+    try {
+      await _handleTextMessage(from, msgText, quoted);
+    } catch (err) {
+      console.error(`[Handler] Error processing message from ${from}:`, err.message);
+      await sendTextMessage(from, 'Something went wrong on my end — please try that again.').catch(() => {});
+    }
+  };
   try {
-    await _handleTextMessage(from, text, quotedMsgId);
-    // Process queued messages FIFO
+    await runOne(text, quotedMsgId);
+    // Process queued messages FIFO; each is independently guarded.
     while (entry.queue.length > 0) {
       const next = entry.queue.shift();
-      await _handleTextMessage(from, next.text, next.quotedMsgId);
+      await runOne(next.text, next.quotedMsgId);
     }
-  } catch (err) {
-    console.error(`[Handler] Error processing message from ${from}:`, err.message);
   } finally {
     entry.processing = false;
     entry.startedAt = 0;
@@ -358,7 +368,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
       const ids = aiResult.ids || [];
       if (aiResult.action === 'cancel') {
         // For "cancel all/everything", use the active list as source of truth (AI ids may be stale)
-        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
         const targetIds = isBulkRequest ? activeRems.map(r => r.id) : ids;
         if (targetIds.length === 0 && isBulkRequest) {
           return sendTextMessage(from, "You don't have any active reminders to cancel.");
@@ -441,7 +451,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         return sendTextMessage(from, `✅ Updated ${updated.length} reminders to "${aiResult.newText}"`);
       }
       if (aiResult.action === 'complete') {
-        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
         // For bulk requests, ignore AI's ids (which may be stale) — use current active list
         let targetIds = isBulkRequest ? activeRems.map(r => r.id) : ids;
 
@@ -568,6 +578,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         return sendTextMessage(from, `🤔 ${aiResult.needsInfo}`);
       }
       const reminders = aiResult.reminders || [];
+      let created = 0;
       for (const r of reminders) {
         if (r.remindAt) {
           // Handle "after this meeting" — check calendar for next event end time
@@ -589,18 +600,26 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
               }
             } catch { actualRemindAt = new Date(Date.now() + 60 * 60000).toISOString(); } // fallback: 1 hour
           }
+          const when = new Date(actualRemindAt);
+          if (isNaN(when.getTime())) continue; // skip un-parseable times rather than crash in saveAndConfirm
           const parsed = {
             text: r.text,
-            remindAt: new Date(actualRemindAt),
+            remindAt: when,
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
             priority: r.priority || 'normal',
             sharedWith: r.sharedWith || null,
           };
           await saveAndConfirm(from, parsed, settings);
+          created++;
         }
       }
-      if (reminders.length > 0) return;
+      if (created > 0) return;
+      // AI returned a reminder intent but no usable time on any entry — ask, don't go silent.
+      if (reminders.length > 0) {
+        pendingClarification.set(from, { originalText: text.trim() });
+        return sendTextMessage(from, "Got the reminder, but when should I remind you?");
+      }
     }
   }
 
@@ -1233,11 +1252,15 @@ export async function handleReactionMessage(from, emoji, reactedMsgId) {
 
   try {
     if (emoji === '👍' || emoji === '✅') {
-      // Mark as done
-      await logCompletedReminder(reminderId);
-      await deactivateReminder(reminderId);
+      // Mark as done — deactivate first so a logging failure can't block completion.
+      const reminder = await getReminder(reminderId);
       const { cancelReminder: cancel } = await import('./scheduler.js');
       cancel(reminderId);
+      await deactivateReminder(reminderId);
+      if (reminder) {
+        await logCompletedReminder({ chatId: from, text: reminder.text, remindAt: reminder.remind_at });
+        if (reminder.cron_expr) { await updateStreak(from, reminder.text, reminder.cron_expr); }
+      }
       await sendTextMessage(from, 'Marked as done ✓');
     } else if (emoji === '⏰' || emoji === '🔁') {
       // Snooze 1 hour

@@ -45,6 +45,30 @@ if (!TOKEN) {
 }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
+
+// Markdown-safe send: if Telegram rejects a message because user content
+// contains unbalanced *_`[ entities, retry once as plain text so the reply
+// is never silently dropped. Wraps every caller (index.js, scheduler.js,
+// commands.js) in one place.
+const _origSendMessage = bot.sendMessage.bind(bot);
+bot.sendMessage = async (chatId, text, options = {}) => {
+  try {
+    return await _origSendMessage(chatId, text, options);
+  } catch (err) {
+    const msg = err?.message || '';
+    if (options.parse_mode && /can't parse entities|parse entities|can't find end/i.test(msg)) {
+      const { parse_mode, ...rest } = options;
+      try {
+        return await _origSendMessage(chatId, text, rest);
+      } catch (err2) {
+        console.error('[TG] Plain-text retry also failed:', err2.message);
+        throw err2;
+      }
+    }
+    throw err;
+  }
+};
+
 bot.on("error", (err) => console.error("[TG] Bot error:", err.message));
 bot.on("polling_error", (err) => console.error("[TG] Polling error:", err.message));
 initScheduler(bot);
@@ -353,6 +377,7 @@ bot.on('message', async (msg) => {
   const text = msg.text.trim();
   const lower = text.toLowerCase();
 
+  try {
   // Check if this is a reply to a bot message linked to a reminder
   if (msg.reply_to_message) {
     const repliedMsgId = msg.reply_to_message.message_id;
@@ -607,7 +632,7 @@ bot.on('message', async (msg) => {
       }
       const ids = aiResult.ids || [];
       if (aiResult.action === 'cancel') {
-        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
         const targetIds = isBulkRequest ? activeReminders.map(r => r.id) : ids;
         if (targetIds.length === 0 && isBulkRequest) {
           bot.sendMessage(chatId, "You don't have any active reminders to cancel.");
@@ -730,7 +755,7 @@ bot.on('message', async (msg) => {
       }
 
       if (aiResult.action === 'complete') {
-        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
         let targetIds = isBulkRequest ? activeReminders.map(r => r.id) : ids;
 
         if (targetIds.length === 0 && isBulkRequest) {
@@ -861,11 +886,14 @@ bot.on('message', async (msg) => {
       const reminders = aiResult.reminders || [];
       // Extract URL from original message
       const urlMatch = text.match(/(https?:\/\/[^\s]+)/i);
+      let created = 0;
       for (const r of reminders) {
         if (r.remindAt) {
+          const when = new Date(r.remindAt);
+          if (isNaN(when.getTime())) continue; // skip un-parseable times rather than crash in saveAndConfirm
           const parsed = {
             text: r.text,
-            remindAt: new Date(r.remindAt),
+            remindAt: when,
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
             notes: r.notes || null,
@@ -875,9 +903,15 @@ bot.on('message', async (msg) => {
             mediaId: urlMatch ? urlMatch[1] : null,
           };
           await saveAndConfirm(chatId, parsed, settings);
+          created++;
         }
       }
-      if (reminders.length > 0) return;
+      if (created > 0) return;
+      if (reminders.length > 0) {
+        pendingClarification.set(String(chatId), { originalText: text.trim() });
+        bot.sendMessage(chatId, "Got the reminder, but when should I remind you?");
+        return;
+      }
     }
   }
 
@@ -897,6 +931,10 @@ bot.on('message', async (msg) => {
     '• "in 30 minutes check the oven"\n\n' +
     "Or just chat — I'm friendly! Send /menu for options."
   );
+  } catch (err) {
+    console.error('[TG Message error]', err.message);
+    bot.sendMessage(chatId, 'Something went wrong on my end — please try that again.').catch(() => {});
+  }
 });
 
 async function saveAndConfirm(chatId, parsed, settings) {

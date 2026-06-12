@@ -623,7 +623,7 @@ export function setupWhatsAppDigest() {
         if (activeStreaks.length > 0) {
           msg += '\n\n*Streaks:*';
           for (const s of activeStreaks.slice(0, 5)) {
-            msg += `\n  🔥 ${s.task_text} — ${s.current_streak} days`;
+            msg += `\n  🔥 ${s.reminder_text} — ${s.current_streak} days`;
           }
         }
 
