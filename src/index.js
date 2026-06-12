@@ -8,7 +8,7 @@ import {
   clearIgnoredSince, logCompletedReminder, resetFireCount,
   updateStreak, getAllStreaks, setLocation,
   createUrlMonitor, getUserMonitors, deactivateMonitor,
-  setGoogleTokens, getGoogleTokens,
+  setGoogleTokens, getGoogleTokens, assignReminderToProject,
 } from './db.js';
 import { parseReminderSmart, parseReminder, detectCategory } from './parser.js';
 import { classifyIntent } from './ai.js';
@@ -36,6 +36,7 @@ import {
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
   buildDashboard, handleProjectIntent, handlePinIntent, handleFollowupIntent,
   handleResearchIntent, handleEmailIntent, handleUndo as universalUndo, checkConflicts,
+  orderRemindersForDisplay,
 } from './assistant.js';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -244,6 +245,7 @@ bot.on('callback_query', async (query) => {
 
 // Store pending photos waiting for a time
 const pendingPhotos = new Map();
+const pendingProjectTask = new Map(); // chatId -> { taskText, projectId, projectName }
 
 // Cleanup stale pending entries every 30 minutes
 setInterval(() => {
@@ -253,6 +255,7 @@ setInterval(() => {
   }
   // pendingPhotos and pendingForwards — clear all (if user hasn't responded in 30 min, they forgot)
   if (pendingPhotos.size > 0) { console.log(`[Cleanup] Clearing ${pendingPhotos.size} stale pending photos`); pendingPhotos.clear(); }
+  if (pendingProjectTask.size > 0) pendingProjectTask.clear();
   if (pendingForwards.size > 0) { console.log(`[Cleanup] Clearing ${pendingForwards.size} stale pending forwards`); pendingForwards.clear(); }
 }, 1800000); // 30 minutes
 
@@ -455,6 +458,27 @@ bot.on('message', async (msg) => {
   }
 
   // Check for pending photo awaiting a time or action
+  // Pending project task awaiting a time
+  if (pendingProjectTask.has(String(chatId))) {
+    const task = pendingProjectTask.get(String(chatId));
+    const settings = await getSettings(String(chatId));
+    const aiRes = await classifyIntent(`remind me ${text} to ${task.taskText}`, settings.timezone, new Date().toISOString(), []);
+    if (aiRes?.intent === 'reminder' && aiRes.reminders?.[0]?.remindAt) {
+      pendingProjectTask.delete(String(chatId));
+      const r = aiRes.reminders[0];
+      const when = new Date(r.remindAt);
+      if (isNaN(when.getTime())) { bot.sendMessage(chatId, "I couldn't read that time — try \"tomorrow 5pm\"."); return; }
+      const id = await saveAndConfirm(chatId, {
+        text: task.taskText, remindAt: when, cronExpr: r.cronExpr || null, category: r.category || null, notes: null,
+      }, settings);
+      if (id) await assignReminderToProject(id, task.projectId);
+      bot.sendMessage(chatId, `Added to *${task.projectName}*.`, { parse_mode: 'Markdown' }).catch(() => {});
+      return;
+    }
+    bot.sendMessage(chatId, `When should I remind you about "${task.taskText}"? (e.g. "tomorrow 5pm")`);
+    return;
+  }
+
   if (pendingPhotos.has(String(chatId))) {
     const photo = pendingPhotos.get(String(chatId));
 
@@ -553,7 +577,8 @@ bot.on('message', async (msg) => {
   // --- AI-first intent classification ---
   bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message));
   const settings = await getSettings(String(chatId));
-  const activeReminders = await getActiveReminders(String(chatId));
+  // Order to match handleList's letter assignment so "cancel a" hits the reminder the user saw.
+  const activeReminders = orderRemindersForDisplay(await getActiveReminders(String(chatId)));
   const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString(), activeReminders, String(chatId));
 
   if (aiResult) {
@@ -856,8 +881,8 @@ bot.on('message', async (msg) => {
     if (aiResult.intent === 'project') {
       const result = await handleProjectIntent(String(chatId), aiResult, settings.timezone);
       if (result?.needsTime) {
-        pendingPhotos.set(String(chatId), { text: result.taskText, msgId: null });
-        bot.sendMessage(chatId, `Adding "${result.taskText}" to project. When should I remind you?`);
+        pendingProjectTask.set(String(chatId), { taskText: result.taskText, projectId: result.projectId, projectName: aiResult.name || 'project' });
+        bot.sendMessage(chatId, `Adding "${result.taskText}" to ${aiResult.name || 'project'}. When should I remind you?`);
         return;
       }
       bot.sendMessage(chatId, result, { parse_mode: 'Markdown' }); return;
@@ -1005,4 +1030,5 @@ async function saveAndConfirm(chatId, parsed, settings) {
       keys.forEach(k => messageReminderMap.delete(k));
     }
   }
+  return id;
 }

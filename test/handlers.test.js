@@ -6,10 +6,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSnooze, detectCategory, toCronExpr } from '../src/parser.js';
+import { orderRemindersForDisplay } from '../src/assistant.js';
 
-// The exact regex the handlers use to decide "operate on ALL reminders".
-// Kept in sync with src/whatsapp/handler.js and src/index.js.
-const BULK_RE = /\b(all|every|everything|both)\b/i;
+// The exact bulk-detection the handlers use to decide "operate on ALL reminders".
+// Kept in sync with src/whatsapp/handler.js and src/index.js. Tightened so a
+// recurrence phrase like "every day" no longer nukes every reminder.
+const isBulk = (text) => /\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text);
 
 test('bulk-action detection matches plural/all phrasings', () => {
   for (const phrase of [
@@ -18,20 +20,36 @@ test('bulk-action detection matches plural/all phrasings', () => {
     'complete all reminders',
     'cancel both',
     'mark every reminder done',
+    'cancel every single one',
   ]) {
-    assert.ok(BULK_RE.test(phrase), `expected bulk match: "${phrase}"`);
+    assert.ok(isBulk(phrase), `expected bulk match: "${phrase}"`);
   }
 });
 
-test('bulk-action detection does NOT match single-target phrasings', () => {
+test('bulk-action detection does NOT match single-target or recurrence phrasings', () => {
   for (const phrase of [
     'done with gold exchange',
     'cancel the dentist reminder',
     'mark gym as done',
     'reschedule lady bug to 10am',
+    'cancel my reminder to read every day',   // the data-loss footgun: "every day" must NOT be bulk
+    'remind me to stretch every morning',
   ]) {
-    assert.equal(BULK_RE.test(phrase), false, `should not be bulk: "${phrase}"`);
+    assert.equal(isBulk(phrase), false, `should not be bulk: "${phrase}"`);
   }
+});
+
+test('orderRemindersForDisplay groups Today → Upcoming → Recurring (canonical letter order)', () => {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const reminders = [
+    { id: 1, text: 'recurring early', cron_expr: '0 6 * * *', remind_at: `${todayStr}T06:00:00.000Z` },
+    { id: 2, text: 'today noon', cron_expr: null, remind_at: `${todayStr}T12:00:00.000Z` },
+    { id: 3, text: 'next week', cron_expr: null, remind_at: '2999-01-01T09:00:00.000Z' },
+  ];
+  const ordered = orderRemindersForDisplay(reminders);
+  // Today first (id 2), then upcoming (id 3), then recurring (id 1) — even though
+  // the recurring one has the earliest remind_at.
+  assert.deepEqual(ordered.map(r => r.id), [2, 3, 1]);
 });
 
 test('parseSnooze understands minutes and hours', () => {

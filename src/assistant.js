@@ -730,6 +730,24 @@ export async function handleUndo(chatId) {
 }
 
 /**
+ * Canonical reminder ordering for letter IDs: Today → Upcoming → Recurring.
+ * MUST match how sendList (WhatsApp) and handleList (Telegram) render letters,
+ * so when the AI letters the active reminders for "cancel a", the letter the
+ * user saw maps to the same reminder. Order-only; safe to reorder since action
+ * handlers resolve by id, not position.
+ */
+export function orderRemindersForDisplay(reminders) {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const today = [], upcoming = [], recurring = [];
+  for (const r of reminders) {
+    if (r.cron_expr) recurring.push(r);
+    else if (String(r.remind_at).startsWith(todayStr)) today.push(r);
+    else upcoming.push(r);
+  }
+  return [...today, ...upcoming, ...recurring];
+}
+
+/**
  * Check for conflicts near a given time.
  */
 export async function checkConflicts(chatId, remindAt) {

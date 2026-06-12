@@ -23,7 +23,7 @@ import {
   createUrlMonitor, getUserMonitors, deactivateMonitor,
   snoozeReminder as dbSnooze,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
-  clearIgnoredSince, logCompletedReminder,
+  clearIgnoredSince, logCompletedReminder, assignReminderToProject,
 } from '../db.js';
 import {
   scheduleReminder, cancelReminder,
@@ -37,18 +37,21 @@ import {
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
   buildDashboard, handleProjectIntent, handlePinIntent, handleFollowupIntent,
   handleResearchIntent, handleEmailIntent, handleUndo, checkConflicts,
+  orderRemindersForDisplay,
 } from '../assistant.js';
 
 // Track state
 const pendingClearAll = new Set();
 const pendingClarification = new Map();
 const pendingPhotos = new Map(); // from -> { waMediaId, mimeType, caption }
+const pendingProjectTask = new Map(); // from -> { taskText, projectId, projectName }
 
 // Cleanup stale pending entries every 30 minutes
 setInterval(() => {
   if (pendingClearAll.size > 0) pendingClearAll.clear();
   if (pendingClarification.size > 0) { console.log(`[WA Cleanup] Clearing ${pendingClarification.size} stale clarifications`); pendingClarification.clear(); }
   if (pendingPhotos.size > 0) { console.log(`[WA Cleanup] Clearing ${pendingPhotos.size} stale pending photos`); pendingPhotos.clear(); }
+  if (pendingProjectTask.size > 0) pendingProjectTask.clear();
 }, 1800000);
 const lastCreated = new Map();
 const lastCreatedId = new Map(); // from -> last reminder ID
@@ -227,6 +230,27 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     return sendTextMessage(from, 'Clear all cancelled.');
   }
 
+  // Pending project task awaiting a time
+  if (pendingProjectTask.has(from)) {
+    const task = pendingProjectTask.get(from);
+    const settings = await getSettings(from);
+    const aiResult = await classifyIntent(`remind me ${text.trim()} to ${task.taskText}`, settings.timezone, new Date().toISOString(), []);
+    if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+      pendingProjectTask.delete(from);
+      const r = aiResult.reminders[0];
+      const when = new Date(r.remindAt);
+      if (isNaN(when.getTime())) return sendTextMessage(from, "I couldn't read that time — try \"tomorrow 5pm\".");
+      const id = await createReminderAndSchedule(from, {
+        text: task.taskText, remindAt: when, cronExpr: r.cronExpr || null, category: null, notes: null,
+      }, settings);
+      await assignReminderToProject(id, task.projectId);
+      const timeStr = formatTime(when.toISOString(), settings.timezone);
+      return sendTextMessage(from, `✅ Added to *${task.projectName}*: ${task.taskText}\n${timeStr}`);
+    }
+    // Couldn't parse a time — keep the pending task and re-ask instead of going silent.
+    return sendTextMessage(from, `When should I remind you about "${task.taskText}"? (e.g. "tomorrow 5pm")`);
+  }
+
   // Pending photo awaiting a time or action
   if (pendingPhotos.has(from)) {
     const photo = pendingPhotos.get(from);
@@ -299,7 +323,8 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
 
   // --- AI-first intent classification ---
   const settings = await getSettings(from);
-  const activeRems = await getActiveReminders(from);
+  // Order to match sendList's letter assignment so "cancel a" hits the reminder the user saw.
+  const activeRems = orderRemindersForDisplay(await getActiveReminders(from));
   const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString(), activeRems, from);
 
   // Only log reschedule-related intents so we can diagnose the bug (keeps normal logs clean)
@@ -554,9 +579,9 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     if (aiResult.intent === 'project') {
       const result = await handleProjectIntent(from, aiResult, settings.timezone);
       if (result?.needsTime) {
-        // Store for pending time input
-        pendingPhotos.set(from, { text: result.taskText, projectId: result.projectId });
-        return sendTextMessage(from, `Adding "${result.taskText}" to project. When should I remind you?`);
+        // Dedicated pending map — NOT pendingPhotos (which would attach a bogus image).
+        pendingProjectTask.set(from, { taskText: result.taskText, projectId: result.projectId, projectName: aiResult.name || 'project' });
+        return sendTextMessage(from, `Adding "${result.taskText}" to ${aiResult.name || 'project'}. When should I remind you?`);
       }
       return sendTextMessage(from, result);
     }
@@ -854,13 +879,11 @@ async function sendList(to) {
 
   const settings = await getSettings(to);
   const todayStr = new Date().toISOString().split('T')[0];
-  const today = [], upcoming = [], recurring = [];
-
-  for (const r of reminders) {
-    if (r.cron_expr) recurring.push(r);
-    else if (r.remind_at.startsWith(todayStr)) today.push(r);
-    else upcoming.push(r);
-  }
+  // Same canonical order the AI letters against (orderRemindersForDisplay).
+  const ordered = orderRemindersForDisplay(reminders);
+  const today = ordered.filter(r => !r.cron_expr && String(r.remind_at).startsWith(todayStr));
+  const upcoming = ordered.filter(r => !r.cron_expr && !String(r.remind_at).startsWith(todayStr));
+  const recurring = ordered.filter(r => r.cron_expr);
 
   const letters = 'abcdefghijklmnopqrstuvwxyz';
   let idx = 0;
