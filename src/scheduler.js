@@ -539,12 +539,12 @@ export function setupDailyDigest() {
     }
   });
 
-  // Check for ignored reminders every 6 hours
+  // Check for ignored reminders every 6 hours (Telegram users only — phone-number IDs are WhatsApp)
   cron.schedule('0 */6 * * *', async () => {
     if (!botInstance) return;
 
     const allReminders = await getAllActiveReminders();
-    const chatIds = [...new Set(allReminders.map(r => r.chat_id))];
+    const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
 
     for (const chatId of chatIds) {
       const ignored = await getIgnoredReminders(chatId);

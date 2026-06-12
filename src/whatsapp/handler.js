@@ -408,6 +408,11 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
       if (aiResult.action === 'cancel') {
         // For "cancel all/everything", use the active list as source of truth (AI ids may be stale)
         const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
+        // Bulk cancel of 3+ is destructive and only single-undo — confirm first (mirrors "clear all").
+        if (isBulkRequest && activeRems.length > 2) {
+          pendingClearAll.add(from);
+          return sendTextMessage(from, `⚠️ Cancel *all ${activeRems.length}* reminders? Reply *YES* to confirm, or anything else to keep them.`);
+        }
         const targetIds = isBulkRequest ? activeRems.map(r => r.id) : ids;
         if (targetIds.length === 0 && isBulkRequest) {
           return sendTextMessage(from, "You don't have any active reminders to cancel.");
@@ -1243,29 +1248,6 @@ async function createReminderAndSchedule(from, parsed, settings) {
 
 // --- Voice note transcription via OpenAI Whisper ---
 
-async function transcribeAudio(audioBuffer, mimeType) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return null;
-  try {
-    const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : 'webm';
-    const formData = new FormData();
-    formData.append('file', new Blob([audioBuffer], { type: mimeType }), `voice.${ext}`);
-    formData.append('model', 'whisper-1');
-    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: formData,
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.text || null;
-  } catch (err) {
-    console.error('[Transcribe] Error:', err.message);
-    return null;
-  }
-}
-
 export async function handleAudioMessage(from, audioId, mimeType) {
   try {
     const mediaUrl = await getMediaUrl(audioId);
@@ -1273,6 +1255,7 @@ export async function handleAudioMessage(from, audioId, mimeType) {
     const buffer = await downloadMedia(mediaUrl);
     if (!buffer) return sendTextMessage(from, "Couldn't download the voice note.");
 
+    const { transcribeAudio } = await import('../transcribe.js');
     const transcript = await transcribeAudio(buffer, mimeType);
     if (!transcript) {
       if (!process.env.OPENAI_API_KEY) return sendTextMessage(from, 'Voice notes need an OpenAI API key to be configured.');

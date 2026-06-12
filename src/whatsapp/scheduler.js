@@ -465,7 +465,7 @@ export function setupWhatsAppDigest() {
     } catch (err) { console.error('[WA Idle Check]', err.message); }
   });
 
-  // Follow-up check — every 6 hours (WhatsApp users)
+  // Follow-up + ignored-reminder check — every 6 hours (WhatsApp users)
   cron.schedule('0 */6 * * *', async () => {
     try {
       const { getDueFollowups } = await import('../db.js');
@@ -475,6 +475,14 @@ export function setupWhatsAppDigest() {
         const due = await getDueFollowups(chatId);
         for (const f of due) {
           sendTextMessage(chatId, `*Follow-up due:* ${f.person} — ${f.subject}\nSay "followup ${f.id} done" when resolved.`).catch(e => console.error("[Send]", e.message));
+        }
+        // Ignored reminders — firing 3+ days with no response (mirrors Telegram, WhatsApp wording).
+        const ignored = await getIgnoredReminders(chatId);
+        if (ignored.length > 0) {
+          let msg = '🔔 *Ignored reminders*\nThese have been firing for 3+ days with no response:\n';
+          for (const r of ignored) msg += `\n  • ${r.text}`;
+          msg += '\n\nSay "cancel" + the name, or "pause" to stop all.';
+          sendTextMessage(chatId, msg).catch(e => console.error("[Send]", e.message));
         }
       }
     } catch (err) { console.error('[WA Follow-up Check]', err.message); }

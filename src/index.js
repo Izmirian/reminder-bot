@@ -274,6 +274,34 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // Handle voice notes / audio — transcribe via Whisper, then process as text
+  if (msg.voice || msg.audio) {
+    const chatId = msg.chat.id;
+    const media = msg.voice || msg.audio;
+    const mimeType = media.mime_type || 'audio/ogg';
+    try {
+      const { transcribeAudio, isTranscriptionConfigured } = await import('./transcribe.js');
+      if (!isTranscriptionConfigured()) {
+        bot.sendMessage(chatId, 'Voice notes need an OpenAI API key configured.');
+        return;
+      }
+      bot.sendChatAction(chatId, 'typing').catch(() => {});
+      const file = await bot.getFile(media.file_id);
+      const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
+      const res = await fetch(fileUrl, { signal: AbortSignal.timeout(20000) });
+      const buffer = Buffer.from(await res.arrayBuffer());
+      const transcript = await transcribeAudio(buffer, mimeType);
+      if (!transcript) { bot.sendMessage(chatId, 'Failed to transcribe that voice note — try again or type it.'); return; }
+      await bot.sendMessage(chatId, `🎙️ _"${transcript}"_`, { parse_mode: 'Markdown' }).catch(() => {});
+      // Re-emit as a text message through the normal pipeline.
+      bot.emit('message', { ...msg, text: transcript, voice: undefined, audio: undefined });
+    } catch (err) {
+      console.error('[TG Voice]', err.message);
+      bot.sendMessage(chatId, 'Failed to process that voice note.');
+    }
+    return;
+  }
+
   // Handle documents (PDFs, files)
   if (msg.document) {
     const chatId = msg.chat.id;
@@ -318,6 +346,29 @@ bot.on('message', async (msg) => {
     const caption = msg.caption || '';
 
     try {
+      // Receipt scanning — auto-log an expense from a receipt photo (mirrors WhatsApp)
+      const receiptKeywords = /receipt|bill|invoice|scan receipt|log this|expense|how much/i;
+      if (caption && receiptKeywords.test(caption)) {
+        bot.sendChatAction(chatId, 'typing').catch(() => {});
+        const photoId = msg.photo[msg.photo.length - 1].file_id;
+        const file = await bot.getFile(photoId);
+        const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
+        const res = await fetch(fileUrl, { signal: AbortSignal.timeout(15000) });
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const { scanReceipt } = await import('./analyze.js');
+        const receipt = await scanReceipt(buffer, 'image/jpeg');
+        if (receipt && receipt.amount) {
+          const { addExpense } = await import('./db.js');
+          await addExpense(String(chatId), receipt.amount, receipt.description, receipt.category, receipt.currency || 'JOD');
+          bot.sendMessage(chatId, `Receipt logged: *${receipt.amount.toFixed(2)} ${receipt.currency || 'JD'}* — ${receipt.description || 'expense'} (${receipt.category || 'other'})`, { parse_mode: 'Markdown' });
+          return;
+        }
+        // Not a parseable receipt → fall back to normal analysis.
+        const { analyzeImage } = await import('./analyze.js');
+        bot.sendMessage(chatId, await analyzeImage(buffer, 'image/jpeg', caption));
+        return;
+      }
+
       // Check if user wants analysis
       const analyzeKeywords = /analyz|summariz|read this|what is this|what does|extract|report|review|explain|translate|describe|tell me about|check this|look at/i;
       if (caption && analyzeKeywords.test(caption)) {
@@ -675,6 +726,12 @@ bot.on('message', async (msg) => {
       const ids = aiResult.ids || [];
       if (aiResult.action === 'cancel') {
         const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
+        // Bulk cancel of 3+ is destructive and only single-undo — confirm first (mirrors "clear all").
+        if (isBulkRequest && activeReminders.length > 2) {
+          pendingClearAll.add(String(chatId));
+          bot.sendMessage(chatId, `⚠️ Cancel *all ${activeReminders.length}* reminders? Reply *YES* to confirm, or anything else to keep them.`, { parse_mode: 'Markdown' });
+          return;
+        }
         const targetIds = isBulkRequest ? activeReminders.map(r => r.id) : ids;
         if (targetIds.length === 0 && isBulkRequest) {
           bot.sendMessage(chatId, "You don't have any active reminders to cancel.");
