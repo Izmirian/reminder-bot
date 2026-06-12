@@ -302,6 +302,32 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // Handle shared location — save it + surface location-tagged reminders (mirrors WhatsApp)
+  if (msg.location) {
+    const chatId = msg.chat.id;
+    try {
+      const { latitude, longitude } = msg.location;
+      await setLocation(String(chatId), `${latitude.toFixed(4)},${longitude.toFixed(4)}`);
+      const active = await getActiveReminders(String(chatId));
+      const locationReminders = active.filter(r => {
+        const t = (r.text + ' ' + (r.notes || '')).toLowerCase();
+        return /\bat\b|\bnear\b|\bwhen i'm at\b|\bwhen i get to\b|\bstop by\b|\bpick up/i.test(t);
+      });
+      if (locationReminders.length > 0) {
+        let m = `📍 Location noted. You have ${locationReminders.length} location-tagged reminder${locationReminders.length > 1 ? 's' : ''}:\n`;
+        for (const r of locationReminders.slice(0, 5)) m += `\n• ${r.text}`;
+        m += '\n\nReply "done with [task]" to mark any complete.';
+        bot.sendMessage(chatId, m);
+      } else {
+        bot.sendMessage(chatId, '📍 Location saved.');
+      }
+    } catch (err) {
+      console.error('[TG Location]', err.message);
+      bot.sendMessage(chatId, 'Location received.');
+    }
+    return;
+  }
+
   // Handle documents (PDFs, files)
   if (msg.document) {
     const chatId = msg.chat.id;
