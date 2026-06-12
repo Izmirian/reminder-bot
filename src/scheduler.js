@@ -107,6 +107,26 @@ async function fireReminder(reminder) {
 
   // Context-aware message
   const settings = await getSettings(reminder.chat_id);
+
+  // Quiet hours: hold non-urgent reminders until the window ends.
+  if (reminder.priority !== 'urgent') {
+    const { isQuietNow, quietRemainingMs } = await import('./quiet.js');
+    if (isQuietNow(settings)) {
+      const delayMs = quietRemainingMs(settings);
+      if (reminder.cron_expr) {
+        const t = setTimeout(async () => {
+          try { const fresh = await getReminder(reminder.id); if (fresh && fresh.active === 1) fireReminder(fresh); }
+          catch (e) { console.error('[Quiet catch-up]', e.message); }
+        }, delayMs);
+        activeJobs.set(`quiet:${reminder.id}`, { timeout: t });
+      } else {
+        await updateReminderTime(reminder.id, new Date(Date.now() + delayMs).toISOString());
+      }
+      console.log(`[Quiet] Held reminder ${reminder.id} ~${Math.round(delayMs / 60000)}min until quiet-end`);
+      return;
+    }
+  }
+
   const message = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
   const options = buildSnoozeKeyboard(reminder.id, reminder.snooze_count || 0);
 

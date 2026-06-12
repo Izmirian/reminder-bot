@@ -100,11 +100,14 @@ Classify the message into one of these intents and return a JSON object:
    - **Auto-date extraction**: If the user mentions an important date in conversation (wedding, birthday, anniversary, deadline, exam, trip, event) with a specific date, include "autoSave": { "event": "description", "date": "YYYY-MM-DD" } in the response alongside the reply. Example: "wedding is June 15" → reply normally AND include autoSave.
 
 3. **"command"** — The user wants a general bot action (NOT cancel/edit/reschedule — those are "action").
-   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|dashboard|timezone|digest|location|connect_calendar|disconnect_calendar|help|menu", "args": "optional" }
+   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|dashboard|timezone|digest|location|connect_calendar|disconnect_calendar|quiet_hours|help|menu", "args": "optional" }
    - "dashboard", "overview", "show me everything", "status", "my day" → command=dashboard
    - "set location Amman" or "my city is Dubai" → command=location, args="Amman" or "Dubai"
    - "connect google calendar" or "sync my calendar" → command=connect_calendar
    - "disconnect calendar" → command=disconnect_calendar
+   - "quiet hours 11pm to 8am", "set quiet hours 23:00-08:00", "don't disturb me at night" → command=quiet_hours, args="11pm to 8am" (pass the raw time range as args)
+   - "turn off quiet hours", "disable do not disturb" → command=quiet_hours, args="off"
+   - "what are my quiet hours", "show quiet hours" → command=quiet_hours, args="show"
    - IMPORTANT: "cancel", "delete", "remove", "edit", "change", "move", "reschedule" referring to existing reminders should ALWAYS use intent "action", NOT "command".
 
 4. **"action"** — The user wants to cancel, edit, reschedule, or add notes to EXISTING reminders. Use this for ANY message about modifying, deleting, removing, or changing reminders.

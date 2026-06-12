@@ -73,3 +73,35 @@ test('toCronExpr produces a valid 5-field cron for daily', () => {
   assert.equal(typeof expr, 'string');
   assert.equal(expr.trim().split(/\s+/).length, 5, `not 5 fields: "${expr}"`);
 });
+
+import { isQuietNow, parseQuietSpec, formatClock } from '../src/quiet.js';
+
+test('parseQuietSpec handles natural-language and disable forms', () => {
+  assert.deepEqual(parseQuietSpec('11pm to 8am'), { start: '23:00', end: '08:00' });
+  assert.deepEqual(parseQuietSpec('23:00-08:00'), { start: '23:00', end: '08:00' });
+  assert.deepEqual(parseQuietSpec('10 pm until 7 am'), { start: '22:00', end: '07:00' });
+  assert.deepEqual(parseQuietSpec('off'), { start: null, end: null });
+  assert.equal(parseQuietSpec('gibberish'), null);
+});
+
+test('isQuietNow respects the wrap-past-midnight window', () => {
+  // Build a window that definitely contains "now" and one that definitely doesn't,
+  // using UTC so the test is timezone-stable.
+  const nowH = new Date().getUTCHours();
+  const inStart = String((nowH + 23) % 24).padStart(2, '0') + ':00'; // 1h before now
+  const inEnd = String((nowH + 1) % 24).padStart(2, '0') + ':00';    // 1h after now
+  assert.equal(isQuietNow({ quiet_start: inStart, quiet_end: inEnd, timezone: 'UTC' }), true);
+
+  const outStart = String((nowH + 2) % 24).padStart(2, '0') + ':00';
+  const outEnd = String((nowH + 4) % 24).padStart(2, '0') + ':00';
+  assert.equal(isQuietNow({ quiet_start: outStart, quiet_end: outEnd, timezone: 'UTC' }), false);
+
+  // No window set → never quiet.
+  assert.equal(isQuietNow({ timezone: 'UTC' }), false);
+});
+
+test('formatClock renders 24h as 12h', () => {
+  assert.equal(formatClock('23:00'), '11:00 PM');
+  assert.equal(formatClock('08:30'), '8:30 AM');
+  assert.equal(formatClock('00:00'), '12:00 AM');
+});

@@ -636,6 +636,23 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, `Location set to *${aiResult.args}*\nWeather will show in your morning briefing.`, { parse_mode: 'Markdown' });
         return;
       }
+      if (cmd === 'quiet_hours') {
+        const { parseQuietSpec, formatClock } = await import('./quiet.js');
+        const { setQuietHours } = await import('./db.js');
+        const arg = (aiResult.args || '').trim().toLowerCase();
+        const cur = await getSettings(String(chatId));
+        if (arg === 'show' || arg === '') {
+          if (cur.quiet_start && cur.quiet_end) bot.sendMessage(chatId, `Quiet hours: *${formatClock(cur.quiet_start)} → ${formatClock(cur.quiet_end)}*\nNon-urgent reminders are held until they end.`, { parse_mode: 'Markdown' });
+          else bot.sendMessage(chatId, 'Quiet hours are off. Set them like "quiet hours 11pm to 8am".');
+          return;
+        }
+        const spec = parseQuietSpec(arg);
+        if (!spec) { bot.sendMessage(chatId, 'Try "quiet hours 11pm to 8am" or "turn off quiet hours".'); return; }
+        await setQuietHours(String(chatId), spec.start, spec.end);
+        if (!spec.start) bot.sendMessage(chatId, 'Quiet hours turned off. Reminders will fire any time.');
+        else bot.sendMessage(chatId, `Quiet hours set: *${formatClock(spec.start)} → ${formatClock(spec.end)}*\nNon-urgent reminders will wait until then. Urgent ones still come through.`, { parse_mode: 'Markdown' });
+        return;
+      }
       if (cmd === 'connect_calendar') {
         const { getAuthUrl, isConfigured } = await import('./google-calendar.js');
         if (!isConfigured()) { bot.sendMessage(chatId, 'Google Calendar not configured yet.'); return; }

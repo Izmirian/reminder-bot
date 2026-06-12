@@ -41,6 +41,28 @@ function getNextCronDate() {
 async function fireReminder(reminder) {
   try {
     const settings = await getSettings(reminder.chat_id);
+
+    // Quiet hours: hold non-urgent reminders until the window ends.
+    if (reminder.priority !== 'urgent') {
+      const { isQuietNow, quietRemainingMs } = await import('../quiet.js');
+      if (isQuietNow(settings)) {
+        const delayMs = quietRemainingMs(settings);
+        if (reminder.cron_expr) {
+          // Recurring: schedule a one-off catch-up at quiet-end without touching the cron job.
+          const t = setTimeout(async () => {
+            try { const fresh = await getReminder(reminder.id); if (fresh && fresh.active === 1) fireReminder(fresh); }
+            catch (e) { console.error('[Quiet catch-up]', e.message); }
+          }, delayMs);
+          activeJobs.set(`quiet:${reminder.id}`, { timeout: t });
+        } else {
+          // One-off: move it to quiet-end; the every-2-min missed net redelivers (survives restart).
+          await updateReminderTime(reminder.id, new Date(Date.now() + delayMs).toISOString());
+        }
+        console.log(`[Quiet] Held reminder ${reminder.id} ~${Math.round(delayMs / 60000)}min until quiet-end`);
+        return;
+      }
+    }
+
     const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
 
     // Send image if attached — upload from stored binary, then send

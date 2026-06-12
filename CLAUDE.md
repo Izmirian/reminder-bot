@@ -31,6 +31,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | `src/google-calendar.js` | Google Calendar OAuth2, event CRUD, two-way sync, transient retry on 5xx |
 | `src/url-monitor.js` | URL change/price monitoring with content hashing |
 | `src/monitor.js` | Reliability monitoring — external heartbeat (HEALTHCHECK_URL) + internal DB self-check that alerts owner via WhatsApp |
+| `src/quiet.js` | Quiet hours — `isQuietNow`/`quietRemainingMs`/`parseQuietSpec`; non-urgent reminders held during the window, deferred via `fireReminder` gate in both schedulers |
 | `src/parser.js` | chrono-node fallback date parser with `looksLikeReminder()` gate |
 | `src/commands.js` | Telegram slash command handlers |
 | `src/context.js` | Reminder fire message builder (priority-aware) |
@@ -42,7 +43,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | Table | Purpose |
 |-------|---------|
 | `reminders` | Core — 20+ columns including priority, media, shared_with, google_event_id, project_id |
-| `settings` | Per-user — timezone, digest, location, google_tokens |
+| `settings` | Per-user — timezone, digest, location, google_tokens, quiet_start/quiet_end |
 | `completed_reminders` | Completion log with day/hour/minute for pattern detection |
 | `streaks` | Recurring reminder completion streaks |
 | `url_monitors` | Watched URLs with content hashes and prices |

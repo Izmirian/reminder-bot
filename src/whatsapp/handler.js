@@ -16,7 +16,7 @@ import {
   markReminderCancelled,
   deactivateAllReminders, deactivateTodaysReminders, pauseAllReminders,
   resumeAllReminders, getPausedReminders, getSettings, setTimezone,
-  setDailyDigest, setLocation, setGoogleTokens, updateReminderText, updateReminderTime,
+  setDailyDigest, setLocation, setQuietHours, setGoogleTokens, updateReminderText, updateReminderTime,
   getTodaysReminders, getLastDeactivated, reactivateReminder,
   getWeeklyStats, attachMedia, attachMediaWithData, getLastReminder, addNoteToReminder, searchReminders,
   updateStreak, getAllStreaks,
@@ -373,6 +373,20 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
       if (cmd === 'location' && aiResult.args) {
         await setLocation(from, aiResult.args);
         return sendTextMessage(from, `Location set to *${aiResult.args}*\nWeather will show in your morning briefing.`);
+      }
+      if (cmd === 'quiet_hours') {
+        const { parseQuietSpec, formatClock } = await import('../quiet.js');
+        const arg = (aiResult.args || '').trim().toLowerCase();
+        const cur = await getSettings(from);
+        if (arg === 'show' || arg === '') {
+          if (cur.quiet_start && cur.quiet_end) return sendTextMessage(from, `Quiet hours: *${formatClock(cur.quiet_start)} → ${formatClock(cur.quiet_end)}*\nNon-urgent reminders are held until they end. Say "turn off quiet hours" to disable.`);
+          return sendTextMessage(from, 'Quiet hours are off. Set them like "quiet hours 11pm to 8am".');
+        }
+        const spec = parseQuietSpec(arg);
+        if (!spec) return sendTextMessage(from, 'Try "quiet hours 11pm to 8am" or "turn off quiet hours".');
+        await setQuietHours(from, spec.start, spec.end);
+        if (!spec.start) return sendTextMessage(from, 'Quiet hours turned off. Reminders will fire any time.');
+        return sendTextMessage(from, `Quiet hours set: *${formatClock(spec.start)} → ${formatClock(spec.end)}*\nNon-urgent reminders will wait until then. Urgent ones still come through.`);
       }
       if (cmd === 'connect_calendar') {
         const { getAuthUrl, isConfigured } = await import('../google-calendar.js');
@@ -862,11 +876,18 @@ async function sendMenu(to) {
 
 async function sendHelp(to) {
   return sendTextMessage(to,
-    '🤖 *Reminder Bot — Help*\n\n' +
-    '*Setting Reminders:*\n• "remind me at 3pm to call dentist"\n• "in 30 minutes check the oven"\n• "every day at 8am take vitamins"\n\n' +
-    '*Quick Commands:*\n• *menu* — Main menu\n• *view* / *list* — Show reminders\n• *cancel 3* — Cancel reminder #3\n' +
-    '• *edit 3 to 5pm* — Change time\n• *edit 3 buy milk* — Change text\n• *clear all* — Remove all reminders\n' +
-    '• *pause* / *resume* — Pause/resume all\n• *timezone Asia/Dubai* — Set timezone\n• *digest on* / *digest off* — Daily summary'
+    '🤖 *Your Assistant — Help*\n\n' +
+    '*Reminders:*\n• "remind me at 3pm to call dentist"\n• "in 30 minutes check the oven"\n• "every day at 8am take vitamins"\n• *cancel 3* · *edit 3 to 5pm* · *clear all* · *pause*/*resume*\n\n' +
+    '*Also try (just say it naturally):*\n' +
+    '• *Lists:* "add milk to grocery list"\n' +
+    '• *Expenses:* "spent 12 on lunch" · "how much this month?"\n' +
+    '• *Notes/memory:* "remember my wifi is X" · "what\'s my wifi?"\n' +
+    '• *Contacts:* "John\'s birthday is May 3"\n' +
+    '• *Journal:* "journal: had a great day"\n' +
+    '• *Follow-ups:* "follow up with Sarah in 3 days"\n' +
+    '• *Summarize/research:* "summarize <link>" · "compare iPhone prices"\n' +
+    '• *Voice notes:* just send one — I\'ll transcribe it\n\n' +
+    '*Settings:*\n• *quiet hours 11pm to 8am* — hold non-urgent reminders overnight\n• *timezone Asia/Dubai* · *digest on*/*off* · *set location Amman*\n• *connect calendar* · *dashboard*'
   );
 }
 

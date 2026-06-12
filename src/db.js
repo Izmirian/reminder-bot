@@ -286,6 +286,9 @@ async function initPostgres() {
     await pool.query(`UPDATE settings SET google_tokens = NULL WHERE google_tokens = 'null'`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
+    // Quiet hours — "HH:MM" local-time window during which non-urgent reminders are held.
+    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_start TEXT`);
+    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_end TEXT`);
   } catch (e) { console.error('[DB] Migration:', e.message); }
 
   isPostgres = true;
@@ -544,6 +547,12 @@ export async function getUsersWithGoogleTokens() {
 export async function setLocation(chatId, location) {
   await getSettings(chatId);
   await run('UPDATE settings SET location = ? WHERE chat_id = ?', [location, chatId]);
+}
+
+// Quiet hours: pass "HH:MM" strings, or (null, null) to disable.
+export async function setQuietHours(chatId, start, end) {
+  await getSettings(chatId);
+  await run('UPDATE settings SET quiet_start = ?, quiet_end = ? WHERE chat_id = ?', [start, end, chatId]);
 }
 
 // Get users whose digest is due at a specific time (efficient — no full table scan)
