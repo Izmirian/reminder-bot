@@ -202,6 +202,11 @@ async function initPostgres() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_followups_chat_status ON followups(chat_id, status)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_pins_chat ON pins(chat_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_projects_chat ON projects(chat_id, active)`);
+    // Partial index for getNoTimeReminders (chat_id = ? AND active = 1 AND remind_at IS NULL) —
+    // hit on every reminder fire + list/dashboard views.
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reminders_notime ON reminders(chat_id) WHERE active = 1 AND remind_at IS NULL`);
+    // Expression partial index for getMissedReminders, the most frequent query (every 2 min, both platforms).
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reminders_missed ON reminders((remind_at::timestamptz)) WHERE active = 1 AND cron_expr IS NULL AND last_fired_at IS NULL`);
   } catch (e) { console.error('[DB] Index creation error:', e.message); }
 
   // Projects table
@@ -425,6 +430,13 @@ export async function createReminder({ chatId, text, remindAt, cronExpr, timezon
   );
 }
 
+// Pure predicate: a reminder can be scheduled only if it has a one-off time or a cron.
+// No-time rows (remind_at null/empty, no cron) must be skipped so they never fire-at-epoch.
+// Shared by both schedulers (scheduleReminder + load loops) so the guard can't diverge.
+export function isSchedulable(reminder) {
+  return !!(reminder.remind_at || reminder.cron_expr);
+}
+
 // No-time reminder: captured with remind_at NULL. Never scheduled/fired; shown in
 // the list and surfaced when other reminders fire, until the user gives it a time.
 export async function createNoTimeReminder({ chatId, text, category, priority }) {
@@ -479,11 +491,19 @@ export async function getWeeklyStats(chatId) {
 }
 
 export async function getActiveReminders(chatId) {
-  return (await query('SELECT * FROM reminders WHERE chat_id = ? AND active = 1 ORDER BY remind_at ASC', [chatId])).rows;
+  // (remind_at IS NULL) sorts no-time rows last in BOTH Postgres and SQLite; id ASC
+  // gives a stable order within the no-time bucket so letter IDs don't drift between views.
+  return (await query('SELECT * FROM reminders WHERE chat_id = ? AND active = 1 ORDER BY (remind_at IS NULL), remind_at ASC, id ASC', [chatId])).rows;
 }
 
 export async function getAllActiveReminders() {
   return (await query('SELECT * FROM reminders WHERE active = 1')).rows;
+}
+
+// Distinct active chat_ids only — for cron jobs that fan out per user. Avoids
+// SELECT *-ing every reminder (incl. media_data BYTEA) just to derive the user list.
+export async function getActiveChatIds() {
+  return (await query('SELECT DISTINCT chat_id FROM reminders WHERE active = 1')).rows.map(r => r.chat_id);
 }
 
 export async function deactivateReminder(id) {
@@ -681,10 +701,13 @@ export async function getIgnoredReminders(chatId) {
 // Completed reminders
 
 export async function logCompletedReminder({ chatId, text, remindAt }) {
-  const d = new Date(remindAt);
+  // No-time reminders have remindAt = null. new Date(null) is the 1970 epoch,
+  // which would write garbage day/hour/minute and pollute pattern detection.
+  const d = remindAt ? new Date(remindAt) : null;
+  const valid = d && !isNaN(d.getTime());
   await insert(
     'INSERT INTO completed_reminders (chat_id, text, original_remind_at, day_of_week, hour, minute) VALUES (?, ?, ?, ?, ?, ?)',
-    [chatId, text, remindAt, d.getDay(), d.getHours(), d.getMinutes()]
+    [chatId, text, remindAt || null, valid ? d.getDay() : null, valid ? d.getHours() : null, valid ? d.getMinutes() : null]
   );
 }
 
@@ -1058,6 +1081,15 @@ export async function assignReminderToProject(reminderId, projectId) {
 
 export async function getProjectReminders(chatId, projectId) {
   return (await query('SELECT * FROM reminders WHERE chat_id = ? AND project_id = ? AND active = 1 ORDER BY remind_at ASC', [chatId, projectId])).rows;
+}
+
+// One grouped query for per-project task counts → Map(project_id → count).
+// Avoids the dashboard's N+1 (one getProjectReminders per project just for .length).
+export async function getProjectTaskCounts(chatId) {
+  const rows = (await query('SELECT project_id, COUNT(*) AS n FROM reminders WHERE chat_id = ? AND active = 1 AND project_id IS NOT NULL GROUP BY project_id', [chatId])).rows;
+  const map = new Map();
+  for (const r of rows) map.set(Number(r.project_id), Number(r.n));
+  return map;
 }
 
 export async function archiveProject(chatId, name) {

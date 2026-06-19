@@ -9,7 +9,7 @@ import {
   addMemory, getMemories, searchMemory, deleteMemory,
   addExpense, getExpenses, getExpenseSummary,
   getActiveReminders, getAllStreaks, getUserMonitors, getSettings,
-  createProject, getProjects, getProject, assignReminderToProject, getProjectReminders, archiveProject,
+  createProject, getProjects, getProject, assignReminderToProject, getProjectReminders, getProjectTaskCounts, archiveProject,
   addPin, getPins, deletePin,
   createFollowup, getPendingFollowups, completeFollowup,
   logAction, deleteLastAction,
@@ -411,10 +411,10 @@ export async function buildDashboard(chatId, timezone) {
   try {
     const projects = await getProjects(chatId);
     if (projects.length > 0) {
+      const counts = await getProjectTaskCounts(chatId); // one grouped query instead of N
       msg += '\n\n*Projects:*';
       for (const p of projects) {
-        const tasks = await getProjectReminders(chatId, p.id);
-        msg += `\n${p.name}: ${tasks.length} tasks`;
+        msg += `\n${p.name}: ${counts.get(Number(p.id)) || 0} tasks`;
       }
     }
   } catch (e) { /* dashboard section failed silently */ }

@@ -117,3 +117,49 @@ test('formatClock renders 24h as 12h', () => {
   assert.equal(formatClock('08:30'), '8:30 AM');
   assert.equal(formatClock('00:00'), '12:00 AM');
 });
+
+import { isSchedulable } from '../src/db.js';
+
+test('isSchedulable: only rows with a time or cron are scheduled (no-time skipped)', () => {
+  assert.equal(isSchedulable({ remind_at: null, cron_expr: null }), false);   // no-time item
+  assert.equal(isSchedulable({ remind_at: '', cron_expr: null }), false);     // empty string is also no-time
+  assert.equal(isSchedulable({ remind_at: '2030-01-01T09:00:00Z', cron_expr: null }), true);
+  assert.equal(isSchedulable({ remind_at: null, cron_expr: '0 6 * * *' }), true);
+});
+
+// The exact safety-net regex both handlers use to extract the raw task from a
+// no-time capture ("remind me to X" → "X"). Guards a data-loss path (capture vs drop).
+const stripReminderPrefix = (text) =>
+  text.trim().replace(/^(remind me( to| about)?|remember( to)?|note:?)\s*/i, '').trim() || text.trim();
+
+test('safety-net prefix strip extracts the task text for no-time capture', () => {
+  assert.equal(stripReminderPrefix('remind me to buy milk'), 'buy milk');
+  assert.equal(stripReminderPrefix('remind me about the dentist'), 'the dentist');
+  assert.equal(stripReminderPrefix('remember to call mom'), 'call mom');
+  assert.equal(stripReminderPrefix('note: pick up parcel'), 'pick up parcel');
+  assert.equal(stripReminderPrefix('buy milk'), 'buy milk');           // no prefix → unchanged
+  assert.equal(stripReminderPrefix('remind me to '), 'remind me to');  // would-be-empty → falls back to original
+});
+
+test('orderRemindersForDisplay: all four buckets ordered today→upcoming→recurring→noTime', () => {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const reminders = [
+    { id: 1, text: 'no time', cron_expr: null, remind_at: null },
+    { id: 2, text: 'upcoming', cron_expr: null, remind_at: '2999-01-01T09:00:00.000Z' },
+    { id: 3, text: 'recurring', cron_expr: '0 6 * * *', remind_at: `${todayStr}T06:00:00.000Z` },
+    { id: 4, text: 'today', cron_expr: null, remind_at: `${todayStr}T08:00:00.000Z` },
+    { id: 5, text: 'no time 2', cron_expr: null, remind_at: null },
+  ];
+  const ordered = orderRemindersForDisplay(reminders);
+  // today(4) → upcoming(2) → recurring(3) → noTime(1,5 in input order)
+  assert.deepEqual(ordered.map(r => r.id), [4, 2, 3, 1, 5]);
+});
+
+test('orderRemindersForDisplay: cron+null remind_at buckets as recurring, not no-time', () => {
+  const ordered = orderRemindersForDisplay([
+    { id: 1, text: 'recurring no remind_at', cron_expr: '0 9 * * *', remind_at: null },
+  ]);
+  // It has a cron, so it is schedulable/recurring — must NOT be treated as a no-time item.
+  assert.deepEqual(ordered.map(r => r.id), [1]);
+  assert.ok(isSchedulable(ordered[0]));
+});

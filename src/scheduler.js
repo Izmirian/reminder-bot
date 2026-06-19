@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import {
-  getAllActiveReminders,
+  getAllActiveReminders, getActiveChatIds, isSchedulable,
   deactivateReminder,
   updateReminderTime,
   getActiveReminders,
@@ -222,7 +222,7 @@ export function scheduleReminder(reminder) {
   cancelReminder(reminder.id);
 
   // No-time reminders (remind_at NULL) are never scheduled — they live in the list only.
-  if (!reminder.remind_at && !reminder.cron_expr) return;
+  if (!isSchedulable(reminder)) return;
 
   if (reminder.cron_expr) {
     // Recurring reminder via cron
@@ -304,7 +304,7 @@ export async function loadAllReminders() {
   let pastDue = 0;
 
   for (const reminder of reminders) {
-    if (!reminder.remind_at && !reminder.cron_expr) {
+    if (!isSchedulable(reminder)) {
       continue; // no-time reminder — not scheduled
     } else if (reminder.cron_expr) {
       scheduleReminder(reminder);
@@ -335,8 +335,7 @@ export function setupDailyDigest() {
     if (!botInstance) return;
     try {
       const { getLastMessageTime } = await import('./db.js');
-      const allReminders = await getAllActiveReminders();
-      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      const chatIds = (await getActiveChatIds()).filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
       for (const chatId of chatIds) {
         const lastMsg = await getLastMessageTime(chatId);
         if (!lastMsg) continue;
@@ -356,8 +355,7 @@ export function setupDailyDigest() {
     if (!botInstance) return;
     try {
       const { getDueFollowups } = await import('./db.js');
-      const allReminders = await getAllActiveReminders();
-      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      const chatIds = (await getActiveChatIds()).filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
       for (const chatId of chatIds) {
         const due = await getDueFollowups(chatId);
         for (const f of due) {
@@ -371,8 +369,7 @@ export function setupDailyDigest() {
   cron.schedule('0 21 * * 1-6', async () => { // Mon-Sat (Sunday has weekly summary)
     if (!botInstance) return;
     try {
-      const allReminders = await getAllActiveReminders();
-      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      const chatIds = (await getActiveChatIds()).filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
       for (const chatId of chatIds) {
         const settings = await getSettings(chatId);
         if (!settings.daily_digest) continue;
@@ -433,8 +430,7 @@ export function setupDailyDigest() {
   cron.schedule('0 19 * * 0', async () => {
     if (!botInstance) return;
     try {
-      const allReminders = await getAllActiveReminders();
-      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      const chatIds = (await getActiveChatIds()).filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
       for (const chatId of chatIds) {
         const settings = await getSettings(chatId);
         if (!settings.daily_digest) continue;
@@ -447,6 +443,7 @@ export function setupDailyDigest() {
         const days = {};
         const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         for (const r of active) {
+          if (!r.remind_at || r.cron_expr) continue; // skip no-time / recurring rows
           const d = new Date(r.remind_at);
           const key = d.toLocaleDateString('en-CA', { timeZone: settings.timezone });
           if (!days[key]) days[key] = [];
@@ -513,9 +510,8 @@ export function setupDailyDigest() {
     if (!botInstance) return;
     try {
       const { getUpcomingBirthdays } = await import('./db.js');
-      const allReminders = await getAllActiveReminders();
       // Check all users (Telegram only — non-phone-number IDs)
-      const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+      const chatIds = (await getActiveChatIds()).filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
       const today = new Date();
 
       for (const chatId of chatIds) {
@@ -558,8 +554,7 @@ export function setupDailyDigest() {
   cron.schedule('0 */6 * * *', async () => {
     if (!botInstance) return;
 
-    const allReminders = await getAllActiveReminders();
-    const chatIds = [...new Set(allReminders.map(r => r.chat_id))].filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
+    const chatIds = (await getActiveChatIds()).filter(id => !(id.length >= 10 && /^\d+$/.test(id)));
 
     for (const chatId of chatIds) {
       const ignored = await getIgnoredReminders(chatId);
@@ -678,8 +673,7 @@ export function setupDailyDigest() {
   cron.schedule('0 21 * * 0', async () => {
     if (!botInstance) return;
 
-    const allReminders = await getAllActiveReminders();
-    const chatIds = [...new Set(allReminders.map(r => r.chat_id))];
+    const chatIds = await getActiveChatIds();
 
     for (const chatId of chatIds) {
       // Only Telegram chat ids
