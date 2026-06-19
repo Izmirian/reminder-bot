@@ -35,7 +35,7 @@ async function initPostgres() {
       id SERIAL PRIMARY KEY,
       chat_id TEXT NOT NULL,
       text TEXT NOT NULL,
-      remind_at TEXT NOT NULL,
+      remind_at TEXT,
       cron_expr TEXT,
       timezone TEXT DEFAULT 'UTC',
       category TEXT,
