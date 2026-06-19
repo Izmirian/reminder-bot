@@ -67,3 +67,15 @@ test('full create→cancel→activity roundtrip stamps cancelled_at', { skip: !h
   const summary = await db.getActivitySummary(TEST_CHAT, since);
   assert.ok(summary.cancelled.some(r => r.id === id), 'cancelled reminder should appear in activity');
 });
+
+test('no-time reminder: create with NULL remind_at, appears in getNoTimeReminders', { skip: !hasDb }, async () => {
+  const id = await db.createNoTimeReminder({ chatId: TEST_CHAT, text: 'ci no-time item', category: 'personal' });
+  assert.ok(id, 'createNoTimeReminder should return an id');
+  const noTime = await db.getNoTimeReminders(TEST_CHAT);
+  assert.ok(noTime.some(r => r.id === id), 'no-time reminder should appear in getNoTimeReminders');
+  // It must NOT leak into the time-based queries that would try to fire it.
+  const missed = await db.getMissedReminders();
+  assert.ok(!missed.some(r => r.id === id), 'no-time reminder must not appear in getMissedReminders');
+  // Cleanup
+  await db.markReminderCancelled(id);
+});

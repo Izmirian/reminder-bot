@@ -63,7 +63,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 
 Smart model selection: Haiku for simple intents, Sonnet for complex ones. Automatic fallback to Sonnet if Haiku returns bad JSON.
 
-1. `reminder` — set reminders with priority, sharing, notes. Bare dates without time trigger needsInfo
+1. `reminder` — set reminders with priority, sharing, notes. **No time given → captured as a no-time item (`remind_at` NULL), never asks for time.** No-time items show in `list` under "No time set" and are surfaced under every reminder fire; give one a time anytime ("set buy milk for 5pm") to schedule it.
 2. `chat` — conversation, math, timezone, translation (multi-language responds in user's language)
 3. `command` — bot actions (list, dashboard, streaks, digest, location, calendar, undo, etc.)
 4. `action` — modify existing reminders (cancel, edit, reschedule, add_note)

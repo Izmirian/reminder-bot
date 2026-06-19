@@ -137,10 +137,12 @@ export async function handleList(bot, msg) {
   const today = [];
   const upcoming = [];
   const recurring = [];
+  const noTime = [];
 
   for (const r of reminders) {
-    if (r.cron_expr) recurring.push(r);
-    else if (r.remind_at.startsWith(todayStr)) today.push(r);
+    if (!r.remind_at && !r.cron_expr) noTime.push(r);   // no-time item (remind_at NULL)
+    else if (r.cron_expr) recurring.push(r);
+    else if (String(r.remind_at).startsWith(todayStr)) today.push(r);
     else upcoming.push(r);
   }
 
@@ -174,6 +176,13 @@ export async function handleList(bot, msg) {
     message += '\n*Recurring:*\n';
     for (const r of recurring) {
       message += `  *${letters[idx++]})* ${r.text}\n    🔁 ${r.cron_expr}\n`;
+    }
+  }
+
+  if (noTime.length > 0) {
+    message += '\n*No time set:*\n';
+    for (const r of noTime) {
+      message += `  *${letters[idx++]})* ${r.text}\n    📝 give it a time anytime\n`;
     }
   }
 

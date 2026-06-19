@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import {
-  createReminder, getSettings, getReminder, getActiveReminders,
+  createReminder, createNoTimeReminder, getNoTimeReminders, getSettings, getReminder, getActiveReminders,
   snoozeReminder as dbSnooze, deactivateReminder, markReminderCancelled, addNoteToReminder,
   attachMedia, getLastReminder, searchReminders,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
@@ -1003,16 +1003,18 @@ bot.on('message', async (msg) => {
     }
 
     if (aiResult.intent === 'reminder') {
-      if (aiResult.needsInfo) {
-        pendingClarification.set(String(chatId), { originalText: text });
-        bot.sendMessage(chatId, `🤔 ${aiResult.needsInfo}`);
-        return;
-      }
       const reminders = aiResult.reminders || [];
       // Extract URL from original message
       const urlMatch = text.match(/(https?:\/\/[^\s]+)/i);
       let created = 0;
+      const noTimeSaved = [];
       for (const r of reminders) {
+        // No time given → capture as a no-time item instead of asking.
+        if (!r.remindAt && r.text) {
+          await createNoTimeReminder({ chatId: String(chatId), text: r.text, category: r.category || detectCategory(r.text), priority: r.priority });
+          noTimeSaved.push(r.text);
+          continue;
+        }
         if (r.remindAt) {
           const when = new Date(r.remindAt);
           if (isNaN(when.getTime())) continue; // skip un-parseable times rather than crash in saveAndConfirm
@@ -1031,12 +1033,16 @@ bot.on('message', async (msg) => {
           created++;
         }
       }
-      if (created > 0) return;
-      if (reminders.length > 0) {
-        pendingClarification.set(String(chatId), { originalText: text.trim() });
-        bot.sendMessage(chatId, "Got the reminder, but when should I remind you?");
-        return;
+      // Safety net: AI flagged a missing time but gave no entries — capture the raw ask as no-time.
+      if (created === 0 && noTimeSaved.length === 0 && (aiResult.needsInfo || reminders.length > 0)) {
+        const t = text.trim().replace(/^(remind me( to| about)?|remember( to)?|note:?)\s*/i, '').trim() || text.trim();
+        if (t) { await createNoTimeReminder({ chatId: String(chatId), text: t, category: detectCategory(t) }); noTimeSaved.push(t); }
       }
+      if (noTimeSaved.length > 0) {
+        const lead = noTimeSaved.length === 1 ? `📝 Added to your list (no time set): *${noTimeSaved[0]}*` : `📝 Added ${noTimeSaved.length} items to your list (no time):${noTimeSaved.map(t => `\n  • ${t}`).join('')}`;
+        bot.sendMessage(chatId, `${lead}\nI'll mention ${noTimeSaved.length === 1 ? 'it' : 'them'} when I remind you of other things. Give a time anytime, e.g. "set ${noTimeSaved[0]} for 5pm".`, { parse_mode: 'Markdown' }).catch(() => {});
+      }
+      if (created > 0 || noTimeSaved.length > 0) return;
     }
   }
 

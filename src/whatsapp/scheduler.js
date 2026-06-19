@@ -63,7 +63,17 @@ async function fireReminder(reminder) {
       }
     }
 
-    const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
+    let contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
+
+    // Surface no-time list items alongside every reminder (capped).
+    try {
+      const { getNoTimeReminders } = await import('../db.js');
+      const noTime = await getNoTimeReminders(reminder.chat_id);
+      if (noTime.length > 0) {
+        contextMsg += `\n\n📝 *On your list (no time):*${noTime.slice(0, 5).map(r => `\n  • ${r.text}`).join('')}`;
+        if (noTime.length > 5) contextMsg += `\n  …+${noTime.length - 5} more`;
+      }
+    } catch (e) { console.error('[WA Fire] no-time append:', e.message); }
 
     // Send image if attached — upload from stored binary, then send
     console.log(`[WA Fire] id=${reminder.id} media_type=${reminder.media_type} has_data=${!!reminder.media_data} data_len=${reminder.media_data?.length || 0}`);
@@ -130,6 +140,9 @@ async function fireReminder(reminder) {
 
 export function scheduleReminder(reminder) {
   cancelReminder(reminder.id);
+
+  // No-time reminders (remind_at NULL) are never scheduled — they live in the list only.
+  if (!reminder.remind_at && !reminder.cron_expr) return;
 
   if (reminder.cron_expr) {
     if (!cron.validate(reminder.cron_expr)) {
@@ -200,7 +213,9 @@ export async function loadWhatsAppReminders() {
   let pastDue = 0;
 
   for (const reminder of waReminders) {
-    if (reminder.cron_expr) {
+    if (!reminder.remind_at && !reminder.cron_expr) {
+      continue; // no-time reminder — not scheduled
+    } else if (reminder.cron_expr) {
       scheduleReminder(reminder);
       scheduled++;
     } else {

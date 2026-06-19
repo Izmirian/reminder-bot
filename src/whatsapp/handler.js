@@ -12,7 +12,7 @@ mkdirSync(MEDIA_DIR, { recursive: true });
 import { parseReminderSmart, parseReminder, detectCategory } from '../parser.js';
 import { classifyIntent } from '../ai.js';
 import {
-  createReminder, getActiveReminders, getReminder, deactivateReminder,
+  createReminder, createNoTimeReminder, getNoTimeReminders, getActiveReminders, getReminder, deactivateReminder,
   markReminderCancelled,
   deactivateAllReminders, deactivateTodaysReminders, pauseAllReminders,
   resumeAllReminders, getPausedReminders, getSettings, setTimezone,
@@ -617,13 +617,16 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     }
 
     if (aiResult.intent === 'reminder') {
-      if (aiResult.needsInfo) {
-        pendingClarification.set(from, { originalText: text.trim() });
-        return sendTextMessage(from, `🤔 ${aiResult.needsInfo}`);
-      }
       const reminders = aiResult.reminders || [];
       let created = 0;
+      const noTimeSaved = [];
       for (const r of reminders) {
+        // No time given → capture as a no-time item instead of asking.
+        if (!r.remindAt && r.text) {
+          await createNoTimeReminder({ chatId: from, text: r.text, category: r.category || detectCategory(r.text), priority: r.priority });
+          noTimeSaved.push(r.text);
+          continue;
+        }
         if (r.remindAt) {
           // Handle "after this meeting" — check calendar for next event end time
           let actualRemindAt = r.remindAt;
@@ -658,12 +661,16 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
           created++;
         }
       }
-      if (created > 0) return;
-      // AI returned a reminder intent but no usable time on any entry — ask, don't go silent.
-      if (reminders.length > 0) {
-        pendingClarification.set(from, { originalText: text.trim() });
-        return sendTextMessage(from, "Got the reminder, but when should I remind you?");
+      // Safety net: AI flagged a missing time but gave no entries — capture the raw ask as no-time.
+      if (created === 0 && noTimeSaved.length === 0 && (aiResult.needsInfo || reminders.length > 0)) {
+        const t = text.trim().replace(/^(remind me( to| about)?|remember( to)?|note:?)\s*/i, '').trim() || text.trim();
+        if (t) { await createNoTimeReminder({ chatId: from, text: t, category: detectCategory(t) }); noTimeSaved.push(t); }
       }
+      if (noTimeSaved.length > 0) {
+        const lead = noTimeSaved.length === 1 ? `📝 Added to your list (no time set): *${noTimeSaved[0]}*` : `📝 Added ${noTimeSaved.length} items to your list (no time):${noTimeSaved.map(t => `\n  • ${t}`).join('')}`;
+        await sendTextMessage(from, `${lead}\nI'll mention ${noTimeSaved.length === 1 ? 'it' : 'them'} when I remind you of other things. Give a time anytime, e.g. "set ${noTimeSaved[0]} for 5pm".`);
+      }
+      if (created > 0 || noTimeSaved.length > 0) return;
     }
   }
 
@@ -907,9 +914,10 @@ async function sendList(to) {
   const todayStr = new Date().toISOString().split('T')[0];
   // Same canonical order the AI letters against (orderRemindersForDisplay).
   const ordered = orderRemindersForDisplay(reminders);
-  const today = ordered.filter(r => !r.cron_expr && String(r.remind_at).startsWith(todayStr));
-  const upcoming = ordered.filter(r => !r.cron_expr && !String(r.remind_at).startsWith(todayStr));
+  const today = ordered.filter(r => r.remind_at && !r.cron_expr && String(r.remind_at).startsWith(todayStr));
+  const upcoming = ordered.filter(r => r.remind_at && !r.cron_expr && !String(r.remind_at).startsWith(todayStr));
   const recurring = ordered.filter(r => r.cron_expr);
+  const noTime = ordered.filter(r => !r.remind_at && !r.cron_expr);
 
   const letters = 'abcdefghijklmnopqrstuvwxyz';
   let idx = 0;
@@ -936,6 +944,12 @@ async function sendList(to) {
     msg += '\n*Recurring:*\n';
     for (const r of recurring) {
       msg += `  *${letters[idx++]})* ${r.text}\n    🔁 ${r.cron_expr}\n`;
+    }
+  }
+  if (noTime.length > 0) {
+    msg += '\n*No time set:*\n';
+    for (const r of noTime) {
+      msg += `  *${letters[idx++]})* ${r.text}\n    📝 give it a time anytime\n`;
     }
   }
   if (paused.length > 0) {

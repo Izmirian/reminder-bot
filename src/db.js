@@ -289,6 +289,8 @@ async function initPostgres() {
     // Quiet hours — "HH:MM" local-time window during which non-urgent reminders are held.
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_start TEXT`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_end TEXT`);
+    // No-time reminders: remind_at NULL = a captured item with no schedule yet.
+    await pool.query(`ALTER TABLE reminders ALTER COLUMN remind_at DROP NOT NULL`);
   } catch (e) { console.error('[DB] Migration:', e.message); }
 
   isPostgres = true;
@@ -324,7 +326,7 @@ async function initSqlite() {
   sqliteDb.exec(`
     CREATE TABLE IF NOT EXISTS reminders (
       id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, text TEXT NOT NULL,
-      remind_at TEXT NOT NULL, cron_expr TEXT, timezone TEXT DEFAULT 'UTC', category TEXT,
+      remind_at TEXT, cron_expr TEXT, timezone TEXT DEFAULT 'UTC', category TEXT,
       snoozed_until TEXT, active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')),
       snooze_count INTEGER DEFAULT 0, last_fired_at TEXT, ignored_since TEXT,
       notes TEXT, media_type TEXT, media_id TEXT
@@ -421,6 +423,19 @@ export async function createReminder({ chatId, text, remindAt, cronExpr, timezon
     'INSERT INTO reminders (chat_id, text, remind_at, cron_expr, timezone, category, priority, shared_with, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [chatId, text, remindAt, cronExpr || null, timezone || 'UTC', category || null, priority || 'normal', sharedWith ? JSON.stringify(sharedWith) : null, createdBy || null]
   );
+}
+
+// No-time reminder: captured with remind_at NULL. Never scheduled/fired; shown in
+// the list and surfaced when other reminders fire, until the user gives it a time.
+export async function createNoTimeReminder({ chatId, text, category, priority }) {
+  return insert(
+    'INSERT INTO reminders (chat_id, text, remind_at, category, priority) VALUES (?, ?, NULL, ?, ?)',
+    [chatId, text, category || null, priority || 'normal']
+  );
+}
+
+export async function getNoTimeReminders(chatId) {
+  return (await query('SELECT * FROM reminders WHERE chat_id = ? AND active = 1 AND remind_at IS NULL ORDER BY created_at DESC', [chatId])).rows;
 }
 
 export async function incrementFireCount(id) {

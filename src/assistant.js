@@ -340,14 +340,16 @@ export async function buildDashboard(chatId, timezone) {
     msg += `\n*Reminders:* ${reminders.length} active`;
     if (todayRems.length > 0) msg += ` (${todayRems.length} today)`;
     if (urgent.length > 0) msg += ` | ${urgent.length} urgent`;
-    if (reminders.length > 0) {
-      const next = reminders[0];
+    const next = reminders.find(r => r.remind_at); // first timed reminder (skip no-time items)
+    if (next) {
       const time = new Date(next.remind_at).toLocaleString('en-US', {
         timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: true,
         weekday: 'short', month: 'short', day: 'numeric',
       });
       msg += `\nNext: *${next.text}* — ${time}`;
     }
+    const noTimeCount = reminders.filter(r => !r.remind_at && !r.cron_expr).length;
+    if (noTimeCount > 0) msg += `\n📝 ${noTimeCount} item${noTimeCount > 1 ? 's' : ''} with no time set`;
   } catch (e) { /* dashboard section failed silently */ }
 
   // Lists
@@ -514,9 +516,9 @@ export async function handleProjectIntent(chatId, aiResult, timezone) {
     let msg = `*${project.name}*\n`;
     const letters = 'abcdefghijklmnopqrstuvwxyz';
     tasks.forEach((t, i) => {
-      const time = new Date(t.remind_at).toLocaleString('en-US', {
+      const time = t.remind_at ? new Date(t.remind_at).toLocaleString('en-US', {
         timeZone: timezone, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true,
-      });
+      }) : 'no time set';
       msg += `\n*${letters[i]})* ${t.text} — ${time}`;
     });
     return msg;
@@ -738,13 +740,14 @@ export async function handleUndo(chatId) {
  */
 export function orderRemindersForDisplay(reminders) {
   const todayStr = new Date().toISOString().split('T')[0];
-  const today = [], upcoming = [], recurring = [];
+  const today = [], upcoming = [], recurring = [], noTime = [];
   for (const r of reminders) {
-    if (r.cron_expr) recurring.push(r);
+    if (!r.remind_at && !r.cron_expr) noTime.push(r);
+    else if (r.cron_expr) recurring.push(r);
     else if (String(r.remind_at).startsWith(todayStr)) today.push(r);
     else upcoming.push(r);
   }
-  return [...today, ...upcoming, ...recurring];
+  return [...today, ...upcoming, ...recurring, ...noTime];
 }
 
 /**

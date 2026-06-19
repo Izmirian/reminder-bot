@@ -52,6 +52,18 @@ test('orderRemindersForDisplay groups Today → Upcoming → Recurring (canonica
   assert.deepEqual(ordered.map(r => r.id), [2, 3, 1]);
 });
 
+test('orderRemindersForDisplay puts no-time items (remind_at NULL) last', () => {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const reminders = [
+    { id: 1, text: 'no time', cron_expr: null, remind_at: null },
+    { id: 2, text: 'today', cron_expr: null, remind_at: `${todayStr}T09:00:00.000Z` },
+    { id: 3, text: 'recurring', cron_expr: '0 6 * * *', remind_at: `${todayStr}T06:00:00.000Z` },
+  ];
+  const ordered = orderRemindersForDisplay(reminders);
+  // today (2) → recurring (3) → no-time (1)
+  assert.deepEqual(ordered.map(r => r.id), [2, 3, 1]);
+});
+
 test('parseSnooze understands minutes and hours', () => {
   assert.equal(parseSnooze('snooze 30'), 30);          // bare = minutes
   assert.equal(parseSnooze('snooze 30 min'), 30);

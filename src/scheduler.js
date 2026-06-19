@@ -127,7 +127,17 @@ async function fireReminder(reminder) {
     }
   }
 
-  const message = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
+  let message = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
+
+  // Surface no-time list items alongside every reminder (capped).
+  try {
+    const { getNoTimeReminders } = await import('./db.js');
+    const noTime = await getNoTimeReminders(reminder.chat_id);
+    if (noTime.length > 0) {
+      message += `\n\n📝 *On your list (no time):*${noTime.slice(0, 5).map(r => `\n  • ${r.text}`).join('')}`;
+      if (noTime.length > 5) message += `\n  …+${noTime.length - 5} more`;
+    }
+  } catch (e) { console.error('[Fire] no-time append:', e.message); }
   const options = buildSnoozeKeyboard(reminder.id, reminder.snooze_count || 0);
 
   try {
@@ -211,6 +221,9 @@ function getNextCronDate(cronExpr) {
 export function scheduleReminder(reminder) {
   cancelReminder(reminder.id);
 
+  // No-time reminders (remind_at NULL) are never scheduled — they live in the list only.
+  if (!reminder.remind_at && !reminder.cron_expr) return;
+
   if (reminder.cron_expr) {
     // Recurring reminder via cron
     if (!cron.validate(reminder.cron_expr)) {
@@ -291,7 +304,9 @@ export async function loadAllReminders() {
   let pastDue = 0;
 
   for (const reminder of reminders) {
-    if (reminder.cron_expr) {
+    if (!reminder.remind_at && !reminder.cron_expr) {
+      continue; // no-time reminder — not scheduled
+    } else if (reminder.cron_expr) {
       scheduleReminder(reminder);
       scheduled++;
     } else {
