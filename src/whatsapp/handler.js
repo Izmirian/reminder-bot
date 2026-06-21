@@ -667,8 +667,10 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         if (t) { await createNoTimeReminder({ chatId: from, text: t, category: detectCategory(t) }); noTimeSaved.push(t); }
       }
       if (noTimeSaved.length > 0) {
-        const lead = noTimeSaved.length === 1 ? `📝 Added to your list (no time set): *${noTimeSaved[0]}*` : `📝 Added ${noTimeSaved.length} items to your list (no time):${noTimeSaved.map(t => `\n  • ${t}`).join('')}`;
-        await sendTextMessage(from, `${lead}\nI'll mention ${noTimeSaved.length === 1 ? 'it' : 'them'} when I remind you of other things. Give a time anytime, e.g. "set ${noTimeSaved[0]} for 5pm".`);
+        const msg = noTimeSaved.length === 1
+          ? `📝 Added to list: *${noTimeSaved[0]}*`
+          : `📝 Added to list:${noTimeSaved.map(t => `\n  • ${t}`).join('')}`;
+        await sendTextMessage(from, msg);
       }
       if (created > 0 || noTimeSaved.length > 0) return;
     }

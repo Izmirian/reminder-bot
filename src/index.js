@@ -1039,8 +1039,10 @@ bot.on('message', async (msg) => {
         if (t) { await createNoTimeReminder({ chatId: String(chatId), text: t, category: detectCategory(t) }); noTimeSaved.push(t); }
       }
       if (noTimeSaved.length > 0) {
-        const lead = noTimeSaved.length === 1 ? `📝 Added to your list (no time set): *${noTimeSaved[0]}*` : `📝 Added ${noTimeSaved.length} items to your list (no time):${noTimeSaved.map(t => `\n  • ${t}`).join('')}`;
-        bot.sendMessage(chatId, `${lead}\nI'll mention ${noTimeSaved.length === 1 ? 'it' : 'them'} when I remind you of other things. Give a time anytime, e.g. "set ${noTimeSaved[0]} for 5pm".`, { parse_mode: 'Markdown' }).catch(() => {});
+        const msg = noTimeSaved.length === 1
+          ? `📝 Added to list: *${noTimeSaved[0]}*`
+          : `📝 Added to list:${noTimeSaved.map(t => `\n  • ${t}`).join('')}`;
+        bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(() => {});
       }
       if (created > 0 || noTimeSaved.length > 0) return;
     }
