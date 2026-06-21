@@ -26,6 +26,28 @@ export function chatAllowed(chatId) {
 }
 
 /**
+ * Detect an explicit idea-capture prefix ("idea:", "thought:", or a leading "#").
+ * Returns the cleaned idea text, or null. ("note:" is intentionally left to the
+ * pin intent to preserve existing behavior.)
+ */
+export function extractIdeaPrefix(text) {
+  const t = (text || '').trim();
+  const m = t.match(/^(?:idea|thought)\s*:\s*([\s\S]+)/i);
+  if (m) return m[1].trim();
+  if (t.startsWith('#') && t.length > 1) return t.slice(1).trim();
+  return null;
+}
+
+/** Build the WhatsApp reply for an idea captured into the Thoughts graph. */
+export function ideaCapturedReply(result) {
+  if (!result?.ok) return '💡 Noted, but the idea graph is unreachable right now.';
+  if (result.linkedCount > 0) {
+    return `💡 Captured — linked to ${result.linkedCount} related thought${result.linkedCount > 1 ? 's' : ''}.`;
+  }
+  return '💡 Captured.';
+}
+
+/**
  * Send one item to the Thoughts service.
  * @param {object} p
  * @param {string} p.chatId
