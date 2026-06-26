@@ -12,18 +12,18 @@ mkdirSync(MEDIA_DIR, { recursive: true });
 import { parseReminderSmart, parseReminder, detectCategory } from '../parser.js';
 import { classifyIntent } from '../ai.js';
 import {
-  createReminder, getActiveReminders, getReminder, deactivateReminder,
+  createReminder, createNoTimeReminder, getNoTimeReminders, getActiveReminders, getReminder, deactivateReminder,
   markReminderCancelled,
   deactivateAllReminders, deactivateTodaysReminders, pauseAllReminders,
   resumeAllReminders, getPausedReminders, getSettings, setTimezone,
-  setDailyDigest, setLocation, setGoogleTokens, updateReminderText, updateReminderTime,
+  setDailyDigest, setLocation, setQuietHours, setGoogleTokens, updateReminderText, updateReminderTime,
   getTodaysReminders, getLastDeactivated, reactivateReminder,
   getWeeklyStats, attachMedia, attachMediaWithData, getLastReminder, addNoteToReminder, searchReminders,
   updateStreak, getAllStreaks,
   createUrlMonitor, getUserMonitors, deactivateMonitor,
   snoozeReminder as dbSnooze,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
-  clearIgnoredSince, logCompletedReminder,
+  clearIgnoredSince, logCompletedReminder, assignReminderToProject,
 } from '../db.js';
 import {
   scheduleReminder, cancelReminder,
@@ -39,18 +39,21 @@ import {
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
   buildDashboard, handleProjectIntent, handlePinIntent, handleFollowupIntent,
   handleResearchIntent, handleEmailIntent, handleUndo, checkConflicts,
+  orderRemindersForDisplay,
 } from '../assistant.js';
 
 // Track state
 const pendingClearAll = new Set();
 const pendingClarification = new Map();
 const pendingPhotos = new Map(); // from -> { waMediaId, mimeType, caption }
+const pendingProjectTask = new Map(); // from -> { taskText, projectId, projectName }
 
 // Cleanup stale pending entries every 30 minutes
 setInterval(() => {
   if (pendingClearAll.size > 0) pendingClearAll.clear();
   if (pendingClarification.size > 0) { console.log(`[WA Cleanup] Clearing ${pendingClarification.size} stale clarifications`); pendingClarification.clear(); }
   if (pendingPhotos.size > 0) { console.log(`[WA Cleanup] Clearing ${pendingPhotos.size} stale pending photos`); pendingPhotos.clear(); }
+  if (pendingProjectTask.size > 0) pendingProjectTask.clear();
 }, 1800000);
 const lastCreated = new Map();
 const lastCreatedId = new Map(); // from -> last reminder ID
@@ -102,24 +105,30 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
   if (entry.processing) {
     if (entry.queue.length < 5) { // Cap queue to prevent abuse
       entry.queue.push({ text, quotedMsgId });
+    } else {
+      // Queue full — don't silently swallow; tell the user we're behind.
+      sendTextMessage(from, "I'm still working through your earlier messages — one sec.").catch(() => {});
     }
     return;
   }
 
   entry.processing = true;
   entry.startedAt = Date.now();
+  // Run one message with its own guard so a failure can't strand the queue or go silent.
+  const runOne = async (msgText, quoted) => {
+    try {
+      await _handleTextMessage(from, msgText, quoted);
+    } catch (err) {
+      console.error(`[Handler] Error processing message from ${from}:`, err.message);
+      await sendTextMessage(from, 'Something went wrong on my end — please try that again.').catch(() => {});
+    }
+  };
   try {
-    // Process this message, then drain the queue FIFO. Errors are isolated
-    // per-message so one failure (e.g. a WhatsApp API send error) can't strand
-    // the messages queued behind it.
-    let current = { text, quotedMsgId };
-    while (current) {
-      try {
-        await _handleTextMessage(from, current.text, current.quotedMsgId);
-      } catch (err) {
-        console.error(`[Handler] Error processing message from ${from}:`, err.message);
-      }
-      current = entry.queue.shift() || null;
+    await runOne(text, quotedMsgId);
+    // Process queued messages FIFO; each is independently guarded.
+    while (entry.queue.length > 0) {
+      const next = entry.queue.shift();
+      await runOne(next.text, next.quotedMsgId);
     }
   } finally {
     entry.processing = false;
@@ -245,6 +254,27 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     return sendTextMessage(from, 'Clear all cancelled.');
   }
 
+  // Pending project task awaiting a time
+  if (pendingProjectTask.has(from)) {
+    const task = pendingProjectTask.get(from);
+    const settings = await getSettings(from);
+    const aiResult = await classifyIntent(`remind me ${text.trim()} to ${task.taskText}`, settings.timezone, new Date().toISOString(), []);
+    if (aiResult?.intent === 'reminder' && aiResult.reminders?.[0]?.remindAt) {
+      pendingProjectTask.delete(from);
+      const r = aiResult.reminders[0];
+      const when = new Date(r.remindAt);
+      if (isNaN(when.getTime())) return sendTextMessage(from, "I couldn't read that time — try \"tomorrow 5pm\".");
+      const id = await createReminderAndSchedule(from, {
+        text: task.taskText, remindAt: when, cronExpr: r.cronExpr || null, category: null, notes: null,
+      }, settings);
+      await assignReminderToProject(id, task.projectId);
+      const timeStr = formatTime(when.toISOString(), settings.timezone);
+      return sendTextMessage(from, `✅ Added to *${task.projectName}*: ${task.taskText}\n${timeStr}`);
+    }
+    // Couldn't parse a time — keep the pending task and re-ask instead of going silent.
+    return sendTextMessage(from, `When should I remind you about "${task.taskText}"? (e.g. "tomorrow 5pm")`);
+  }
+
   // Pending photo awaiting a time or action
   if (pendingPhotos.has(from)) {
     const photo = pendingPhotos.get(from);
@@ -325,7 +355,8 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
 
   // --- AI-first intent classification ---
   const settings = await getSettings(from);
-  const activeRems = await getActiveReminders(from);
+  // Order to match sendList's letter assignment so "cancel a" hits the reminder the user saw.
+  const activeRems = orderRemindersForDisplay(await getActiveReminders(from));
   const aiResult = await classifyIntent(text.trim(), settings.timezone, new Date().toISOString(), activeRems, from);
 
   // Only log reschedule-related intents so we can diagnose the bug (keeps normal logs clean)
@@ -375,6 +406,20 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         await setLocation(from, aiResult.args);
         return sendTextMessage(from, `Location set to *${aiResult.args}*\nWeather will show in your morning briefing.`);
       }
+      if (cmd === 'quiet_hours') {
+        const { parseQuietSpec, formatClock } = await import('../quiet.js');
+        const arg = (aiResult.args || '').trim().toLowerCase();
+        const cur = await getSettings(from);
+        if (arg === 'show' || arg === '') {
+          if (cur.quiet_start && cur.quiet_end) return sendTextMessage(from, `Quiet hours: *${formatClock(cur.quiet_start)} → ${formatClock(cur.quiet_end)}*\nNon-urgent reminders are held until they end. Say "turn off quiet hours" to disable.`);
+          return sendTextMessage(from, 'Quiet hours are off. Set them like "quiet hours 11pm to 8am".');
+        }
+        const spec = parseQuietSpec(arg);
+        if (!spec) return sendTextMessage(from, 'Try "quiet hours 11pm to 8am" or "turn off quiet hours".');
+        await setQuietHours(from, spec.start, spec.end);
+        if (!spec.start) return sendTextMessage(from, 'Quiet hours turned off. Reminders will fire any time.');
+        return sendTextMessage(from, `Quiet hours set: *${formatClock(spec.start)} → ${formatClock(spec.end)}*\nNon-urgent reminders will wait until then. Urgent ones still come through.`);
+      }
       if (cmd === 'connect_calendar') {
         const { getAuthUrl, isConfigured } = await import('../google-calendar.js');
         if (!isConfigured()) return sendTextMessage(from, 'Google Calendar not configured yet.');
@@ -394,7 +439,12 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
       const ids = aiResult.ids || [];
       if (aiResult.action === 'cancel') {
         // For "cancel all/everything", use the active list as source of truth (AI ids may be stale)
-        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
+        // Bulk cancel of 3+ is destructive and only single-undo — confirm first (mirrors "clear all").
+        if (isBulkRequest && activeRems.length > 2) {
+          pendingClearAll.add(from);
+          return sendTextMessage(from, `⚠️ Cancel *all ${activeRems.length}* reminders? Reply *YES* to confirm, or anything else to keep them.`);
+        }
         const targetIds = isBulkRequest ? activeRems.map(r => r.id) : ids;
         if (targetIds.length === 0 && isBulkRequest) {
           return sendTextMessage(from, "You don't have any active reminders to cancel.");
@@ -477,7 +527,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         return sendTextMessage(from, `✅ Updated ${updated.length} reminders to "${aiResult.newText}"`);
       }
       if (aiResult.action === 'complete') {
-        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
         // For bulk requests, ignore AI's ids (which may be stale) — use current active list
         let targetIds = isBulkRequest ? activeRems.map(r => r.id) : ids;
 
@@ -583,9 +633,9 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     if (aiResult.intent === 'project') {
       const result = await handleProjectIntent(from, aiResult, settings.timezone);
       if (result?.needsTime) {
-        // Store for pending time input
-        pendingPhotos.set(from, { text: result.taskText, projectId: result.projectId });
-        return sendTextMessage(from, `Adding "${result.taskText}" to project. When should I remind you?`);
+        // Dedicated pending map — NOT pendingPhotos (which would attach a bogus image).
+        pendingProjectTask.set(from, { taskText: result.taskText, projectId: result.projectId, projectName: aiResult.name || 'project' });
+        return sendTextMessage(from, `Adding "${result.taskText}" to ${aiResult.name || 'project'}. When should I remind you?`);
       }
       return sendTextMessage(from, result);
     }
@@ -609,12 +659,16 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     }
 
     if (aiResult.intent === 'reminder') {
-      if (aiResult.needsInfo) {
-        pendingClarification.set(from, { originalText: text.trim() });
-        return sendTextMessage(from, `🤔 ${aiResult.needsInfo}`);
-      }
       const reminders = aiResult.reminders || [];
+      let created = 0;
+      const noTimeSaved = [];
       for (const r of reminders) {
+        // No time given → capture as a no-time item instead of asking.
+        if (!r.remindAt && r.text) {
+          await createNoTimeReminder({ chatId: from, text: r.text, category: r.category || detectCategory(r.text), priority: r.priority });
+          noTimeSaved.push(r.text);
+          continue;
+        }
         if (r.remindAt) {
           // Handle "after this meeting" — check calendar for next event end time
           let actualRemindAt = r.remindAt;
@@ -635,18 +689,32 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
               }
             } catch { actualRemindAt = new Date(Date.now() + 60 * 60000).toISOString(); } // fallback: 1 hour
           }
+          const when = new Date(actualRemindAt);
+          if (isNaN(when.getTime())) continue; // skip un-parseable times rather than crash in saveAndConfirm
           const parsed = {
             text: r.text,
-            remindAt: new Date(actualRemindAt),
+            remindAt: when,
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
             priority: r.priority || 'normal',
             sharedWith: r.sharedWith || null,
           };
           await saveAndConfirm(from, parsed, settings);
+          created++;
         }
       }
-      if (reminders.length > 0) return;
+      // Safety net: AI flagged a missing time but gave no entries — capture the raw ask as no-time.
+      if (created === 0 && noTimeSaved.length === 0 && (aiResult.needsInfo || reminders.length > 0)) {
+        const t = text.trim().replace(/^(remind me( to| about)?|remember( to)?|note:?)\s*/i, '').trim() || text.trim();
+        if (t) { await createNoTimeReminder({ chatId: from, text: t, category: detectCategory(t) }); noTimeSaved.push(t); }
+      }
+      if (noTimeSaved.length > 0) {
+        const msg = noTimeSaved.length === 1
+          ? `📝 Added to list: *${noTimeSaved[0]}*`
+          : `📝 Added to list:${noTimeSaved.map(t => `\n  • ${t}`).join('')}`;
+        await sendTextMessage(from, msg);
+      }
+      if (created > 0 || noTimeSaved.length > 0) return;
     }
   }
 
@@ -864,11 +932,18 @@ async function sendMenu(to) {
 
 async function sendHelp(to) {
   return sendTextMessage(to,
-    '🤖 *Reminder Bot — Help*\n\n' +
-    '*Setting Reminders:*\n• "remind me at 3pm to call dentist"\n• "in 30 minutes check the oven"\n• "every day at 8am take vitamins"\n\n' +
-    '*Quick Commands:*\n• *menu* — Main menu\n• *view* / *list* — Show reminders\n• *cancel 3* — Cancel reminder #3\n' +
-    '• *edit 3 to 5pm* — Change time\n• *edit 3 buy milk* — Change text\n• *clear all* — Remove all reminders\n' +
-    '• *pause* / *resume* — Pause/resume all\n• *timezone Asia/Dubai* — Set timezone\n• *digest on* / *digest off* — Daily summary'
+    '🤖 *Your Assistant — Help*\n\n' +
+    '*Reminders:*\n• "remind me at 3pm to call dentist"\n• "in 30 minutes check the oven"\n• "every day at 8am take vitamins"\n• *cancel 3* · *edit 3 to 5pm* · *clear all* · *pause*/*resume*\n\n' +
+    '*Also try (just say it naturally):*\n' +
+    '• *Lists:* "add milk to grocery list"\n' +
+    '• *Expenses:* "spent 12 on lunch" · "how much this month?"\n' +
+    '• *Notes/memory:* "remember my wifi is X" · "what\'s my wifi?"\n' +
+    '• *Contacts:* "John\'s birthday is May 3"\n' +
+    '• *Journal:* "journal: had a great day"\n' +
+    '• *Follow-ups:* "follow up with Sarah in 3 days"\n' +
+    '• *Summarize/research:* "summarize <link>" · "compare iPhone prices"\n' +
+    '• *Voice notes:* just send one — I\'ll transcribe it\n\n' +
+    '*Settings:*\n• *quiet hours 11pm to 8am* — hold non-urgent reminders overnight\n• *timezone Asia/Dubai* · *digest on*/*off* · *set location Amman*\n• *connect calendar* · *dashboard*'
   );
 }
 
@@ -881,13 +956,12 @@ async function sendList(to) {
 
   const settings = await getSettings(to);
   const todayStr = new Date().toISOString().split('T')[0];
-  const today = [], upcoming = [], recurring = [];
-
-  for (const r of reminders) {
-    if (r.cron_expr) recurring.push(r);
-    else if (r.remind_at.startsWith(todayStr)) today.push(r);
-    else upcoming.push(r);
-  }
+  // Same canonical order the AI letters against (orderRemindersForDisplay).
+  const ordered = orderRemindersForDisplay(reminders);
+  const today = ordered.filter(r => r.remind_at && !r.cron_expr && String(r.remind_at).startsWith(todayStr));
+  const upcoming = ordered.filter(r => r.remind_at && !r.cron_expr && !String(r.remind_at).startsWith(todayStr));
+  const recurring = ordered.filter(r => r.cron_expr);
+  const noTime = ordered.filter(r => !r.remind_at && !r.cron_expr);
 
   const letters = 'abcdefghijklmnopqrstuvwxyz';
   let idx = 0;
@@ -914,6 +988,12 @@ async function sendList(to) {
     msg += '\n*Recurring:*\n';
     for (const r of recurring) {
       msg += `  *${letters[idx++]})* ${r.text}\n    🔁 ${r.cron_expr}\n`;
+    }
+  }
+  if (noTime.length > 0) {
+    msg += '\n*No time set:*\n';
+    for (const r of noTime) {
+      msg += `  *${letters[idx++]})* ${r.text}\n    📝 give it a time anytime\n`;
     }
   }
   if (paused.length > 0) {
@@ -1237,29 +1317,6 @@ async function createReminderAndSchedule(from, parsed, settings) {
 
 // --- Voice note transcription via OpenAI Whisper ---
 
-async function transcribeAudio(audioBuffer, mimeType) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return null;
-  try {
-    const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : 'webm';
-    const formData = new FormData();
-    formData.append('file', new Blob([audioBuffer], { type: mimeType }), `voice.${ext}`);
-    formData.append('model', 'whisper-1');
-    const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: formData,
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.text || null;
-  } catch (err) {
-    console.error('[Transcribe] Error:', err.message);
-    return null;
-  }
-}
-
 export async function handleAudioMessage(from, audioId, mimeType) {
   try {
     const mediaUrl = await getMediaUrl(audioId);
@@ -1267,6 +1324,7 @@ export async function handleAudioMessage(from, audioId, mimeType) {
     const buffer = await downloadMedia(mediaUrl);
     if (!buffer) return sendTextMessage(from, "Couldn't download the voice note.");
 
+    const { transcribeAudio } = await import('../transcribe.js');
     const transcript = await transcribeAudio(buffer, mimeType);
     if (!transcript) {
       if (!process.env.OPENAI_API_KEY) return sendTextMessage(from, 'Voice notes need an OpenAI API key to be configured.');
@@ -1290,11 +1348,15 @@ export async function handleReactionMessage(from, emoji, reactedMsgId) {
 
   try {
     if (emoji === '👍' || emoji === '✅') {
-      // Mark as done
-      await logCompletedReminder(reminderId);
-      await deactivateReminder(reminderId);
+      // Mark as done — deactivate first so a logging failure can't block completion.
+      const reminder = await getReminder(reminderId);
       const { cancelReminder: cancel } = await import('./scheduler.js');
       cancel(reminderId);
+      await deactivateReminder(reminderId);
+      if (reminder) {
+        await logCompletedReminder({ chatId: from, text: reminder.text, remindAt: reminder.remind_at });
+        if (reminder.cron_expr) { await updateStreak(from, reminder.text, reminder.cron_expr); }
+      }
       await sendTextMessage(from, 'Marked as done ✓');
     } else if (emoji === '⏰' || emoji === '🔁') {
       // Snooze 1 hour

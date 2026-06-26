@@ -1,14 +1,14 @@
 import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import {
-  createReminder, getSettings, getReminder, getActiveReminders,
+  createReminder, createNoTimeReminder, getNoTimeReminders, getSettings, getReminder, getActiveReminders,
   snoozeReminder as dbSnooze, deactivateReminder, markReminderCancelled, addNoteToReminder,
   attachMedia, getLastReminder, searchReminders,
   incrementSnoozeCount, getSnoozeCount, resetSnoozeCount,
   clearIgnoredSince, logCompletedReminder, resetFireCount,
   updateStreak, getAllStreaks, setLocation,
   createUrlMonitor, getUserMonitors, deactivateMonitor,
-  setGoogleTokens, getGoogleTokens,
+  setGoogleTokens, getGoogleTokens, assignReminderToProject,
 } from './db.js';
 import { parseReminderSmart, parseReminder, detectCategory } from './parser.js';
 import { classifyIntent } from './ai.js';
@@ -36,6 +36,7 @@ import {
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
   buildDashboard, handleProjectIntent, handlePinIntent, handleFollowupIntent,
   handleResearchIntent, handleEmailIntent, handleUndo as universalUndo, checkConflicts,
+  orderRemindersForDisplay,
 } from './assistant.js';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -45,6 +46,30 @@ if (!TOKEN) {
 }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
+
+// Markdown-safe send: if Telegram rejects a message because user content
+// contains unbalanced *_`[ entities, retry once as plain text so the reply
+// is never silently dropped. Wraps every caller (index.js, scheduler.js,
+// commands.js) in one place.
+const _origSendMessage = bot.sendMessage.bind(bot);
+bot.sendMessage = async (chatId, text, options = {}) => {
+  try {
+    return await _origSendMessage(chatId, text, options);
+  } catch (err) {
+    const msg = err?.message || '';
+    if (options.parse_mode && /can't parse entities|parse entities|can't find end/i.test(msg)) {
+      const { parse_mode, ...rest } = options;
+      try {
+        return await _origSendMessage(chatId, text, rest);
+      } catch (err2) {
+        console.error('[TG] Plain-text retry also failed:', err2.message);
+        throw err2;
+      }
+    }
+    throw err;
+  }
+};
+
 bot.on("error", (err) => console.error("[TG] Bot error:", err.message));
 bot.on("polling_error", (err) => console.error("[TG] Polling error:", err.message));
 initScheduler(bot);
@@ -220,6 +245,7 @@ bot.on('callback_query', async (query) => {
 
 // Store pending photos waiting for a time
 const pendingPhotos = new Map();
+const pendingProjectTask = new Map(); // chatId -> { taskText, projectId, projectName }
 
 // Cleanup stale pending entries every 30 minutes
 setInterval(() => {
@@ -229,6 +255,7 @@ setInterval(() => {
   }
   // pendingPhotos and pendingForwards — clear all (if user hasn't responded in 30 min, they forgot)
   if (pendingPhotos.size > 0) { console.log(`[Cleanup] Clearing ${pendingPhotos.size} stale pending photos`); pendingPhotos.clear(); }
+  if (pendingProjectTask.size > 0) pendingProjectTask.clear();
   if (pendingForwards.size > 0) { console.log(`[Cleanup] Clearing ${pendingForwards.size} stale pending forwards`); pendingForwards.clear(); }
 }, 1800000); // 30 minutes
 
@@ -244,6 +271,60 @@ bot.on('message', async (msg) => {
     const fwdText = msg.text || msg.caption || 'Forwarded message';
     pendingForwards.set(String(chatId), { text: fwdText, msgId: msg.message_id });
     bot.sendMessage(chatId, `Got it: "${fwdText.substring(0, 80)}${fwdText.length > 80 ? '...' : ''}"\n\nWhen should I remind you about this?`);
+    return;
+  }
+
+  // Handle voice notes / audio — transcribe via Whisper, then process as text
+  if (msg.voice || msg.audio) {
+    const chatId = msg.chat.id;
+    const media = msg.voice || msg.audio;
+    const mimeType = media.mime_type || 'audio/ogg';
+    try {
+      const { transcribeAudio, isTranscriptionConfigured } = await import('./transcribe.js');
+      if (!isTranscriptionConfigured()) {
+        bot.sendMessage(chatId, 'Voice notes need an OpenAI API key configured.');
+        return;
+      }
+      bot.sendChatAction(chatId, 'typing').catch(() => {});
+      const file = await bot.getFile(media.file_id);
+      const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
+      const res = await fetch(fileUrl, { signal: AbortSignal.timeout(20000) });
+      const buffer = Buffer.from(await res.arrayBuffer());
+      const transcript = await transcribeAudio(buffer, mimeType);
+      if (!transcript) { bot.sendMessage(chatId, 'Failed to transcribe that voice note — try again or type it.'); return; }
+      await bot.sendMessage(chatId, `🎙️ _"${transcript}"_`, { parse_mode: 'Markdown' }).catch(() => {});
+      // Re-emit as a text message through the normal pipeline.
+      bot.emit('message', { ...msg, text: transcript, voice: undefined, audio: undefined });
+    } catch (err) {
+      console.error('[TG Voice]', err.message);
+      bot.sendMessage(chatId, 'Failed to process that voice note.');
+    }
+    return;
+  }
+
+  // Handle shared location — save it + surface location-tagged reminders (mirrors WhatsApp)
+  if (msg.location) {
+    const chatId = msg.chat.id;
+    try {
+      const { latitude, longitude } = msg.location;
+      await setLocation(String(chatId), `${latitude.toFixed(4)},${longitude.toFixed(4)}`);
+      const active = await getActiveReminders(String(chatId));
+      const locationReminders = active.filter(r => {
+        const t = (r.text + ' ' + (r.notes || '')).toLowerCase();
+        return /\bat\b|\bnear\b|\bwhen i'm at\b|\bwhen i get to\b|\bstop by\b|\bpick up/i.test(t);
+      });
+      if (locationReminders.length > 0) {
+        let m = `📍 Location noted. You have ${locationReminders.length} location-tagged reminder${locationReminders.length > 1 ? 's' : ''}:\n`;
+        for (const r of locationReminders.slice(0, 5)) m += `\n• ${r.text}`;
+        m += '\n\nReply "done with [task]" to mark any complete.';
+        bot.sendMessage(chatId, m);
+      } else {
+        bot.sendMessage(chatId, '📍 Location saved.');
+      }
+    } catch (err) {
+      console.error('[TG Location]', err.message);
+      bot.sendMessage(chatId, 'Location received.');
+    }
     return;
   }
 
@@ -291,6 +372,29 @@ bot.on('message', async (msg) => {
     const caption = msg.caption || '';
 
     try {
+      // Receipt scanning — auto-log an expense from a receipt photo (mirrors WhatsApp)
+      const receiptKeywords = /receipt|bill|invoice|scan receipt|log this|expense|how much/i;
+      if (caption && receiptKeywords.test(caption)) {
+        bot.sendChatAction(chatId, 'typing').catch(() => {});
+        const photoId = msg.photo[msg.photo.length - 1].file_id;
+        const file = await bot.getFile(photoId);
+        const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
+        const res = await fetch(fileUrl, { signal: AbortSignal.timeout(15000) });
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const { scanReceipt } = await import('./analyze.js');
+        const receipt = await scanReceipt(buffer, 'image/jpeg');
+        if (receipt && receipt.amount) {
+          const { addExpense } = await import('./db.js');
+          await addExpense(String(chatId), receipt.amount, receipt.description, receipt.category, receipt.currency || 'JOD');
+          bot.sendMessage(chatId, `Receipt logged: *${receipt.amount.toFixed(2)} ${receipt.currency || 'JD'}* — ${receipt.description || 'expense'} (${receipt.category || 'other'})`, { parse_mode: 'Markdown' });
+          return;
+        }
+        // Not a parseable receipt → fall back to normal analysis.
+        const { analyzeImage } = await import('./analyze.js');
+        bot.sendMessage(chatId, await analyzeImage(buffer, 'image/jpeg', caption));
+        return;
+      }
+
       // Check if user wants analysis
       const analyzeKeywords = /analyz|summariz|read this|what is this|what does|extract|report|review|explain|translate|describe|tell me about|check this|look at/i;
       if (caption && analyzeKeywords.test(caption)) {
@@ -353,6 +457,7 @@ bot.on('message', async (msg) => {
   const text = msg.text.trim();
   const lower = text.toLowerCase();
 
+  try {
   // Check if this is a reply to a bot message linked to a reminder
   if (msg.reply_to_message) {
     const repliedMsgId = msg.reply_to_message.message_id;
@@ -430,6 +535,27 @@ bot.on('message', async (msg) => {
   }
 
   // Check for pending photo awaiting a time or action
+  // Pending project task awaiting a time
+  if (pendingProjectTask.has(String(chatId))) {
+    const task = pendingProjectTask.get(String(chatId));
+    const settings = await getSettings(String(chatId));
+    const aiRes = await classifyIntent(`remind me ${text} to ${task.taskText}`, settings.timezone, new Date().toISOString(), []);
+    if (aiRes?.intent === 'reminder' && aiRes.reminders?.[0]?.remindAt) {
+      pendingProjectTask.delete(String(chatId));
+      const r = aiRes.reminders[0];
+      const when = new Date(r.remindAt);
+      if (isNaN(when.getTime())) { bot.sendMessage(chatId, "I couldn't read that time — try \"tomorrow 5pm\"."); return; }
+      const id = await saveAndConfirm(chatId, {
+        text: task.taskText, remindAt: when, cronExpr: r.cronExpr || null, category: r.category || null, notes: null,
+      }, settings);
+      if (id) await assignReminderToProject(id, task.projectId);
+      bot.sendMessage(chatId, `Added to *${task.projectName}*.`, { parse_mode: 'Markdown' }).catch(() => {});
+      return;
+    }
+    bot.sendMessage(chatId, `When should I remind you about "${task.taskText}"? (e.g. "tomorrow 5pm")`);
+    return;
+  }
+
   if (pendingPhotos.has(String(chatId))) {
     const photo = pendingPhotos.get(String(chatId));
 
@@ -528,7 +654,8 @@ bot.on('message', async (msg) => {
   // --- AI-first intent classification ---
   bot.sendChatAction(chatId, 'typing').catch(e => console.error("[Send]", e.message));
   const settings = await getSettings(String(chatId));
-  const activeReminders = await getActiveReminders(String(chatId));
+  // Order to match handleList's letter assignment so "cancel a" hits the reminder the user saw.
+  const activeReminders = orderRemindersForDisplay(await getActiveReminders(String(chatId)));
   const aiResult = await classifyIntent(text, settings.timezone, new Date().toISOString(), activeReminders, String(chatId));
 
   if (aiResult) {
@@ -586,6 +713,23 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, `Location set to *${aiResult.args}*\nWeather will show in your morning briefing.`, { parse_mode: 'Markdown' });
         return;
       }
+      if (cmd === 'quiet_hours') {
+        const { parseQuietSpec, formatClock } = await import('./quiet.js');
+        const { setQuietHours } = await import('./db.js');
+        const arg = (aiResult.args || '').trim().toLowerCase();
+        const cur = await getSettings(String(chatId));
+        if (arg === 'show' || arg === '') {
+          if (cur.quiet_start && cur.quiet_end) bot.sendMessage(chatId, `Quiet hours: *${formatClock(cur.quiet_start)} → ${formatClock(cur.quiet_end)}*\nNon-urgent reminders are held until they end.`, { parse_mode: 'Markdown' });
+          else bot.sendMessage(chatId, 'Quiet hours are off. Set them like "quiet hours 11pm to 8am".');
+          return;
+        }
+        const spec = parseQuietSpec(arg);
+        if (!spec) { bot.sendMessage(chatId, 'Try "quiet hours 11pm to 8am" or "turn off quiet hours".'); return; }
+        await setQuietHours(String(chatId), spec.start, spec.end);
+        if (!spec.start) bot.sendMessage(chatId, 'Quiet hours turned off. Reminders will fire any time.');
+        else bot.sendMessage(chatId, `Quiet hours set: *${formatClock(spec.start)} → ${formatClock(spec.end)}*\nNon-urgent reminders will wait until then. Urgent ones still come through.`, { parse_mode: 'Markdown' });
+        return;
+      }
       if (cmd === 'connect_calendar') {
         const { getAuthUrl, isConfigured } = await import('./google-calendar.js');
         if (!isConfigured()) { bot.sendMessage(chatId, 'Google Calendar not configured yet.'); return; }
@@ -607,7 +751,13 @@ bot.on('message', async (msg) => {
       }
       const ids = aiResult.ids || [];
       if (aiResult.action === 'cancel') {
-        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
+        // Bulk cancel of 3+ is destructive and only single-undo — confirm first (mirrors "clear all").
+        if (isBulkRequest && activeReminders.length > 2) {
+          pendingClearAll.add(String(chatId));
+          bot.sendMessage(chatId, `⚠️ Cancel *all ${activeReminders.length}* reminders? Reply *YES* to confirm, or anything else to keep them.`, { parse_mode: 'Markdown' });
+          return;
+        }
         const targetIds = isBulkRequest ? activeReminders.map(r => r.id) : ids;
         if (targetIds.length === 0 && isBulkRequest) {
           bot.sendMessage(chatId, "You don't have any active reminders to cancel.");
@@ -730,7 +880,7 @@ bot.on('message', async (msg) => {
       }
 
       if (aiResult.action === 'complete') {
-        const isBulkRequest = /\b(all|every|everything|both)\b/i.test(text);
+        const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
         let targetIds = isBulkRequest ? activeReminders.map(r => r.id) : ids;
 
         if (targetIds.length === 0 && isBulkRequest) {
@@ -831,8 +981,8 @@ bot.on('message', async (msg) => {
     if (aiResult.intent === 'project') {
       const result = await handleProjectIntent(String(chatId), aiResult, settings.timezone);
       if (result?.needsTime) {
-        pendingPhotos.set(String(chatId), { text: result.taskText, msgId: null });
-        bot.sendMessage(chatId, `Adding "${result.taskText}" to project. When should I remind you?`);
+        pendingProjectTask.set(String(chatId), { taskText: result.taskText, projectId: result.projectId, projectName: aiResult.name || 'project' });
+        bot.sendMessage(chatId, `Adding "${result.taskText}" to ${aiResult.name || 'project'}. When should I remind you?`);
         return;
       }
       bot.sendMessage(chatId, result, { parse_mode: 'Markdown' }); return;
@@ -853,19 +1003,24 @@ bot.on('message', async (msg) => {
     }
 
     if (aiResult.intent === 'reminder') {
-      if (aiResult.needsInfo) {
-        pendingClarification.set(String(chatId), { originalText: text });
-        bot.sendMessage(chatId, `🤔 ${aiResult.needsInfo}`);
-        return;
-      }
       const reminders = aiResult.reminders || [];
       // Extract URL from original message
       const urlMatch = text.match(/(https?:\/\/[^\s]+)/i);
+      let created = 0;
+      const noTimeSaved = [];
       for (const r of reminders) {
+        // No time given → capture as a no-time item instead of asking.
+        if (!r.remindAt && r.text) {
+          await createNoTimeReminder({ chatId: String(chatId), text: r.text, category: r.category || detectCategory(r.text), priority: r.priority });
+          noTimeSaved.push(r.text);
+          continue;
+        }
         if (r.remindAt) {
+          const when = new Date(r.remindAt);
+          if (isNaN(when.getTime())) continue; // skip un-parseable times rather than crash in saveAndConfirm
           const parsed = {
             text: r.text,
-            remindAt: new Date(r.remindAt),
+            remindAt: when,
             cronExpr: r.cronExpr || null,
             category: r.category || detectCategory(r.text),
             notes: r.notes || null,
@@ -875,9 +1030,21 @@ bot.on('message', async (msg) => {
             mediaId: urlMatch ? urlMatch[1] : null,
           };
           await saveAndConfirm(chatId, parsed, settings);
+          created++;
         }
       }
-      if (reminders.length > 0) return;
+      // Safety net: AI flagged a missing time but gave no entries — capture the raw ask as no-time.
+      if (created === 0 && noTimeSaved.length === 0 && (aiResult.needsInfo || reminders.length > 0)) {
+        const t = text.trim().replace(/^(remind me( to| about)?|remember( to)?|note:?)\s*/i, '').trim() || text.trim();
+        if (t) { await createNoTimeReminder({ chatId: String(chatId), text: t, category: detectCategory(t) }); noTimeSaved.push(t); }
+      }
+      if (noTimeSaved.length > 0) {
+        const msg = noTimeSaved.length === 1
+          ? `📝 Added to list: *${noTimeSaved[0]}*`
+          : `📝 Added to list:${noTimeSaved.map(t => `\n  • ${t}`).join('')}`;
+        bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(() => {});
+      }
+      if (created > 0 || noTimeSaved.length > 0) return;
     }
   }
 
@@ -897,6 +1064,10 @@ bot.on('message', async (msg) => {
     '• "in 30 minutes check the oven"\n\n' +
     "Or just chat — I'm friendly! Send /menu for options."
   );
+  } catch (err) {
+    console.error('[TG Message error]', err.message);
+    bot.sendMessage(chatId, 'Something went wrong on my end — please try that again.').catch(() => {});
+  }
 });
 
 async function saveAndConfirm(chatId, parsed, settings) {
@@ -967,4 +1138,5 @@ async function saveAndConfirm(chatId, parsed, settings) {
       keys.forEach(k => messageReminderMap.delete(k));
     }
   }
+  return id;
 }

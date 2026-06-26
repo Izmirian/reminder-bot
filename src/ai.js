@@ -48,10 +48,10 @@ function buildPrompt(activeReminders) {
     for (let i = 0; i < activeReminders.length; i++) {
       const r = activeReminders[i];
       const letter = letters[i] || String(i);
-      const time = new Date(r.remind_at).toLocaleString('en-US', {
+      const time = r.remind_at ? new Date(r.remind_at).toLocaleString('en-US', {
         weekday: 'short', month: 'short', day: 'numeric',
         hour: '2-digit', minute: '2-digit', hour12: true,
-      });
+      }) : 'no time set';
       const recur = r.cron_expr ? ' (recurring)' : '';
       const notes = r.notes ? ` [note: ${r.notes}]` : '';
       remindersContext += `${letter}) ID=${r.id}: "${r.text}" — ${time}${recur}${notes}\n`;
@@ -79,8 +79,7 @@ Classify the message into one of these intents and return a JSON object:
      - "buy groceries at 5pm milk eggs bread" → text="buy groceries", notes="milk, eggs, bread"
    - If additional sentences after the reminder task don't include a new time, they're probably notes, not separate reminders.
    - **Daily standup:** If the user lists multiple tasks for today ("today I need to finish report, call Sarah, gym at 6"), create a SEPARATE reminder for each task. Tasks with specific times get that time. Tasks without times → ask for time only for those specific tasks, still create the ones that have times.
-   - IMPORTANT: If the user provides ONLY a day/date (e.g., "tomorrow", "Monday", "next week", "this weekend") WITHOUT a specific time or time-of-day phrase (morning, afternoon, evening, tonight, noon, etc.), return needsInfo asking what time. Do NOT guess or default to 9am. "Tomorrow" alone is NOT enough — ask "What time tomorrow?"
-   - If you can't determine the time, return: { "intent": "reminder", "needsInfo": "short clarifying question" }
+   - NO-TIME reminders: if the user gives NO time at all (e.g. "remind me to buy milk", "remember to call the bank") OR only a day/date with no time (e.g. "tomorrow", "Monday", "next week"), DO NOT ask for a time. Return the reminder with "remindAt": null — it becomes a no-time item the user can schedule later. Never use needsInfo just because a time is missing.
 
 2. **"chat"** — The user is chatting, greeting, asking a question, or making conversation.
    Return: { "intent": "chat", "reply": "Your friendly response here" }
@@ -100,11 +99,14 @@ Classify the message into one of these intents and return a JSON object:
    - **Auto-date extraction**: If the user mentions an important date in conversation (wedding, birthday, anniversary, deadline, exam, trip, event) with a specific date, include "autoSave": { "event": "description", "date": "YYYY-MM-DD" } in the response alongside the reply. Example: "wedding is June 15" → reply normally AND include autoSave.
 
 3. **"command"** — The user wants a general bot action (NOT cancel/edit/reschedule — those are "action").
-   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|dashboard|timezone|digest|location|connect_calendar|disconnect_calendar|help|menu", "args": "optional" }
+   Return: { "intent": "command", "command": "list|clear_all|clear_today|pause|resume|undo|repeat|summary|streaks|dashboard|timezone|digest|location|connect_calendar|disconnect_calendar|quiet_hours|help|menu", "args": "optional" }
    - "dashboard", "overview", "show me everything", "status", "my day" → command=dashboard
    - "set location Amman" or "my city is Dubai" → command=location, args="Amman" or "Dubai"
    - "connect google calendar" or "sync my calendar" → command=connect_calendar
    - "disconnect calendar" → command=disconnect_calendar
+   - "quiet hours 11pm to 8am", "set quiet hours 23:00-08:00", "don't disturb me at night" → command=quiet_hours, args="11pm to 8am" (pass the raw time range as args)
+   - "turn off quiet hours", "disable do not disturb" → command=quiet_hours, args="off"
+   - "what are my quiet hours", "show quiet hours" → command=quiet_hours, args="show"
    - IMPORTANT: "cancel", "delete", "remove", "edit", "change", "move", "reschedule" referring to existing reminders should ALWAYS use intent "action", NOT "command".
 
 4. **"action"** — The user wants to cancel, edit, reschedule, or add notes to EXISTING reminders. Use this for ANY message about modifying, deleting, removing, or changing reminders.
@@ -275,11 +277,11 @@ Smart time phrases:
 - "after this meeting" or "after my meeting" → return remindAt as "AFTER_MEETING" (handler will check calendar for next event end time)
 - "after work" = 6:00 PM (already defined above)
 
-INVALID (day/date ONLY — no time specified, must ask for time):
-- "tomorrow" alone → needsInfo: "What time tomorrow?"
-- "Monday" alone → needsInfo: "What time on Monday?"
-- "next week" alone → needsInfo: "What day and time next week?"
-- "this weekend" alone → needsInfo: "What time this weekend?"
+Bare hour without AM/PM (e.g. "at 9", "at 7 to call mom"): resolve to the NEXT upcoming occurrence of that hour relative to the current local time. If it's currently 2:00 PM, "at 9" means 9:00 PM today; if it's currently 10:00 PM, "at 9" means 9:00 AM tomorrow. Always state the resolved time so the user can correct it. Do NOT silently default a bare hour to AM.
+
+NO TIME GIVEN (capture as no-time item, remindAt: null — do NOT ask for a time):
+- "remind me to buy milk" → { text: "buy milk", remindAt: null }
+- "tomorrow" alone, "Monday" alone, "next week", "this weekend" → remindAt: null (no time, so it's a no-time item)
 
 Category: health (medicine, doctor, gym), work (meeting, email, deadline), personal (groceries, buy, clean)
 ${remindersContext}

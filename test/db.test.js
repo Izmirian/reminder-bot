@@ -67,3 +67,47 @@ test('full create→cancel→activity roundtrip stamps cancelled_at', { skip: !h
   const summary = await db.getActivitySummary(TEST_CHAT, since);
   assert.ok(summary.cancelled.some(r => r.id === id), 'cancelled reminder should appear in activity');
 });
+
+test('no-time reminder: create with NULL remind_at, appears in getNoTimeReminders', { skip: !hasDb }, async () => {
+  const id = await db.createNoTimeReminder({ chatId: TEST_CHAT, text: 'ci no-time item', category: 'personal' });
+  assert.ok(id, 'createNoTimeReminder should return an id');
+  const noTime = await db.getNoTimeReminders(TEST_CHAT);
+  const row = noTime.find(r => r.id === id);
+  assert.ok(row, 'no-time reminder should appear in getNoTimeReminders');
+  // Pin the columns so a future text/category/remind_at column-swap is caught (one shipped tonight).
+  assert.equal(row.text, 'ci no-time item');
+  assert.equal(row.category, 'personal');
+  assert.equal(row.remind_at, null);
+  assert.equal(Number(row.active), 1);
+  // It must NOT leak into the time-based queries that would try to fire it.
+  const missed = await db.getMissedReminders();
+  assert.ok(!missed.some(r => r.id === id), 'no-time reminder must not appear in getMissedReminders');
+  const today = await db.getTodaysReminders(TEST_CHAT, new Date().toISOString().slice(0, 10));
+  assert.ok(!today.some(r => r.id === id), 'no-time reminder must not appear in getTodaysReminders');
+  // But it MUST surface in getActiveReminders (list/AI context) without the ORDER BY throwing.
+  const active = await db.getActiveReminders(TEST_CHAT);
+  assert.ok(active.some(r => r.id === id), 'no-time reminder should appear in getActiveReminders');
+  // Cleanup
+  await db.markReminderCancelled(id);
+});
+
+test('promote-to-timed: updateReminderTime moves a no-time row out of getNoTimeReminders', { skip: !hasDb }, async () => {
+  const id = await db.createNoTimeReminder({ chatId: TEST_CHAT, text: 'ci promote me', category: 'personal' });
+  await db.updateReminderTime(id, new Date(Date.now() + 86400000).toISOString());
+  const noTime = await db.getNoTimeReminders(TEST_CHAT);
+  assert.ok(!noTime.some(r => r.id === id), 'promoted reminder must leave getNoTimeReminders');
+  const active = await db.getActiveReminders(TEST_CHAT);
+  const row = active.find(r => r.id === id);
+  assert.ok(row && row.remind_at, 'promoted reminder should now have a remind_at');
+  await db.markReminderCancelled(id);
+});
+
+test('getProjectTaskCounts returns a Map (grouped count, no N+1)', { skip: !hasDb }, async () => {
+  const counts = await db.getProjectTaskCounts(TEST_CHAT);
+  assert.ok(counts instanceof Map, 'should return a Map of project_id → count');
+});
+
+test('logCompletedReminder tolerates a null remindAt (no-time completion, no epoch pollution)', { skip: !hasDb }, async () => {
+  // Must not throw; the day/hour/minute columns must be NULL, not 1970 epoch values.
+  await db.logCompletedReminder({ chatId: TEST_CHAT, text: 'ci no-time completion', remindAt: null });
+});

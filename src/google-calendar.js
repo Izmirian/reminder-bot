@@ -34,6 +34,46 @@ function getOAuth2Client(tokens) {
 const pendingAuthSessions = new Map();
 
 /**
+ * Detect dead-token auth errors. Google returns invalid_grant as HTTP 400
+ * (not 401), so checking err.code === 401 alone misses expired/revoked
+ * refresh tokens — the exact failure mode that retries forever.
+ */
+function isAuthDead(err) {
+  const msg = (err?.message || '').toLowerCase();
+  return msg.includes('invalid_grant') || err?.code === 401 || err?.status === 401;
+}
+
+// Notify each user at most once per process lifetime about a disconnect.
+const disconnectNotified = new Set();
+
+/**
+ * Token is dead: clear it so crons stop retrying, and tell the user how to
+ * re-link. Routes by platform (phone-number chat IDs → WhatsApp, else Telegram).
+ */
+async function handleAuthFailure(chatId) {
+  try { await setGoogleTokens(chatId, null); } catch {}
+  if (disconnectNotified.has(chatId)) return;
+  disconnectNotified.add(chatId);
+  const text = 'Your Google Calendar got disconnected (token expired). Say "connect calendar" to re-link it.';
+  try {
+    if (chatId.length >= 10 && /^\d+$/.test(chatId)) {
+      const { sendTextMessage } = await import('./whatsapp/api.js');
+      await sendTextMessage(chatId, text);
+    } else if (process.env.TELEGRAM_BOT_TOKEN) {
+      await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text }),
+        signal: AbortSignal.timeout(10000),
+      });
+    }
+    console.log(`[GCal] Cleared dead tokens + notified ${chatId}`);
+  } catch (e) {
+    console.error('[GCal] Failed to notify user of disconnect:', e.message);
+  }
+}
+
+/**
  * Get the Google OAuth2 consent URL with a signed nonce.
  */
 export function getAuthUrl(chatId) {
@@ -133,7 +173,7 @@ export async function createEvent(chatId, reminder) {
       }
     }
     console.error(`[GCal] Failed to create event for reminder ${reminder.id}:`, err.message);
-    if (err.code === 401) await setGoogleTokens(chatId, null);
+    if (isAuthDead(err)) await handleAuthFailure(chatId);
     return null;
   }
 }
@@ -250,7 +290,7 @@ export async function syncFromCalendar(chatId, scheduleReminderFn) {
     return created;
   } catch (err) {
     console.error(`[GCal] Sync failed for ${chatId}:`, err.message);
-    if (err.code === 401) await setGoogleTokens(chatId, null);
+    if (isAuthDead(err)) await handleAuthFailure(chatId);
     return [];
   }
 }

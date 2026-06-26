@@ -4,7 +4,7 @@
 import cron from 'node-cron';
 import { sendReminderMessage, sendTextMessage, sendImageMessage, uploadMedia } from './api.js';
 import {
-  getAllActiveReminders,
+  getAllActiveReminders, getActiveChatIds, isSchedulable,
   deactivateReminder,
   updateReminderTime,
   getTodaysReminders,
@@ -39,9 +39,42 @@ function getNextCronDate() {
 }
 
 async function fireReminder(reminder) {
+  let contextMsg = ''; // hoisted so the shared-recipients block (after the catch) can use it
   try {
     const settings = await getSettings(reminder.chat_id);
-    const contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
+
+    // Quiet hours: hold non-urgent reminders until the window ends.
+    if (reminder.priority !== 'urgent') {
+      const { isQuietNow, quietRemainingMs } = await import('../quiet.js');
+      if (isQuietNow(settings)) {
+        const delayMs = quietRemainingMs(settings);
+        if (reminder.cron_expr) {
+          // Recurring: schedule a one-off catch-up at quiet-end without touching the cron job.
+          const t = setTimeout(async () => {
+            try { const fresh = await getReminder(reminder.id); if (fresh && fresh.active === 1) fireReminder(fresh); }
+            catch (e) { console.error('[Quiet catch-up]', e.message); }
+          }, delayMs);
+          activeJobs.set(`quiet:${reminder.id}`, { timeout: t });
+        } else {
+          // One-off: move it to quiet-end; the every-2-min missed net redelivers (survives restart).
+          await updateReminderTime(reminder.id, new Date(Date.now() + delayMs).toISOString());
+        }
+        console.log(`[Quiet] Held reminder ${reminder.id} ~${Math.round(delayMs / 60000)}min until quiet-end`);
+        return;
+      }
+    }
+
+    contextMsg = buildContextualMessage(reminder.text, reminder.category, settings.timezone, reminder.notes, reminder.priority);
+
+    // Surface no-time list items alongside every reminder (capped).
+    try {
+      const { getNoTimeReminders } = await import('../db.js');
+      const noTime = await getNoTimeReminders(reminder.chat_id);
+      if (noTime.length > 0) {
+        contextMsg += `\n\n📝 *On your list (no time):*${noTime.slice(0, 5).map(r => `\n  • ${r.text}`).join('')}`;
+        if (noTime.length > 5) contextMsg += `\n  …+${noTime.length - 5} more`;
+      }
+    } catch (e) { console.error('[WA Fire] no-time append:', e.message); }
 
     // Send image if attached — upload from stored binary, then send
     console.log(`[WA Fire] id=${reminder.id} media_type=${reminder.media_type} has_data=${!!reminder.media_data} data_len=${reminder.media_data?.length || 0}`);
@@ -108,6 +141,9 @@ async function fireReminder(reminder) {
 
 export function scheduleReminder(reminder) {
   cancelReminder(reminder.id);
+
+  // No-time reminders (remind_at NULL) are never scheduled — they live in the list only.
+  if (!isSchedulable(reminder)) return;
 
   if (reminder.cron_expr) {
     if (!cron.validate(reminder.cron_expr)) {
@@ -178,7 +214,9 @@ export async function loadWhatsAppReminders() {
   let pastDue = 0;
 
   for (const reminder of waReminders) {
-    if (reminder.cron_expr) {
+    if (!isSchedulable(reminder)) {
+      continue; // no-time reminder — not scheduled
+    } else if (reminder.cron_expr) {
       scheduleReminder(reminder);
       scheduled++;
     } else {
@@ -252,8 +290,7 @@ export function setupWhatsAppDigest() {
   cron.schedule('0 8 * * *', async () => {
     try {
       const { getUpcomingBirthdays } = await import('../db.js');
-      const allReminders = await getAllActiveReminders();
-      const waChatIds = [...new Set(allReminders.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      const waChatIds = (await getActiveChatIds()).filter(id => id.length >= 10 && /^\d+$/.test(id));
       const today = new Date();
       for (const chatId of waChatIds) {
         const contacts = await getUpcomingBirthdays(chatId);
@@ -343,7 +380,7 @@ export function setupWhatsAppDigest() {
       try {
         const { getActiveReminders: getActive } = await import('../db.js');
         const allActive = await getActive(chatId);
-        const overdue = allActive.filter(r => new Date(r.remind_at) < new Date() && !r.cron_expr);
+        const overdue = allActive.filter(r => r.remind_at && !r.cron_expr && new Date(r.remind_at) < new Date());
         if (overdue.length > 0) {
           message += `\n\n⚠️ *Overdue (${overdue.length}):*`;
           for (const r of overdue.slice(0, 3)) message += `\n  • ${r.text}`;
@@ -429,8 +466,7 @@ export function setupWhatsAppDigest() {
   cron.schedule('0 */12 * * *', async () => {
     try {
       const { getLastMessageTime, getActiveReminders: getActive } = await import('../db.js');
-      const allRems = await getAllActiveReminders();
-      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      const waChatIds = (await getActiveChatIds()).filter(id => id.length >= 10 && /^\d+$/.test(id));
       for (const chatId of waChatIds) {
         const lastMsg = await getLastMessageTime(chatId);
         if (!lastMsg) continue;
@@ -443,16 +479,23 @@ export function setupWhatsAppDigest() {
     } catch (err) { console.error('[WA Idle Check]', err.message); }
   });
 
-  // Follow-up check — every 6 hours (WhatsApp users)
+  // Follow-up + ignored-reminder check — every 6 hours (WhatsApp users)
   cron.schedule('0 */6 * * *', async () => {
     try {
       const { getDueFollowups } = await import('../db.js');
-      const allRems = await getAllActiveReminders();
-      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      const waChatIds = (await getActiveChatIds()).filter(id => id.length >= 10 && /^\d+$/.test(id));
       for (const chatId of waChatIds) {
         const due = await getDueFollowups(chatId);
         for (const f of due) {
           sendTextMessage(chatId, `*Follow-up due:* ${f.person} — ${f.subject}\nSay "followup ${f.id} done" when resolved.`).catch(e => console.error("[Send]", e.message));
+        }
+        // Ignored reminders — firing 3+ days with no response (mirrors Telegram, WhatsApp wording).
+        const ignored = await getIgnoredReminders(chatId);
+        if (ignored.length > 0) {
+          let msg = '🔔 *Ignored reminders*\nThese have been firing for 3+ days with no response:\n';
+          for (const r of ignored) msg += `\n  • ${r.text}`;
+          msg += '\n\nSay "cancel" + the name, or "pause" to stop all.';
+          sendTextMessage(chatId, msg).catch(e => console.error("[Send]", e.message));
         }
       }
     } catch (err) { console.error('[WA Follow-up Check]', err.message); }
@@ -461,8 +504,7 @@ export function setupWhatsAppDigest() {
   // EOD recap — 9pm Mon-Sat (WhatsApp users)
   cron.schedule('0 21 * * 1-6', async () => {
     try {
-      const allRems = await getAllActiveReminders();
-      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      const waChatIds = (await getActiveChatIds()).filter(id => id.length >= 10 && /^\d+$/.test(id));
       for (const chatId of waChatIds) {
         const settings = await getSettings(chatId);
         if (!settings.daily_digest) continue;
@@ -519,8 +561,7 @@ export function setupWhatsAppDigest() {
   // Week planning — Sunday 7pm (WhatsApp users)
   cron.schedule('0 19 * * 0', async () => {
     try {
-      const allRems = await getAllActiveReminders();
-      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      const waChatIds = (await getActiveChatIds()).filter(id => id.length >= 10 && /^\d+$/.test(id));
       for (const chatId of waChatIds) {
         const settings = await getSettings(chatId);
         if (!settings.daily_digest) continue;
@@ -529,7 +570,7 @@ export function setupWhatsAppDigest() {
         const weekSpend = await getExpenseSummary(chatId, 7);
         const followups = await getPendingFollowups(chatId);
         const days = {}; const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-        for (const r of active) { const key = new Date(r.remind_at).toLocaleDateString('en-CA', { timeZone: settings.timezone }); if (!days[key]) days[key] = []; days[key].push(r); }
+        for (const r of active) { if (!r.remind_at || r.cron_expr) continue; const key = new Date(r.remind_at).toLocaleDateString('en-CA', { timeZone: settings.timezone }); if (!days[key]) days[key] = []; days[key].push(r); }
         let msg = '*Week Ahead*\n';
         for (const day of Object.keys(days).sort().slice(0, 7)) {
           const d = new Date(day);
@@ -565,8 +606,7 @@ export function setupWhatsAppDigest() {
   // Weekly review — Sunday 8pm (WhatsApp users)
   cron.schedule('0 20 * * 0', async () => {
     try {
-      const allRems = await getAllActiveReminders();
-      const waChatIds = [...new Set(allRems.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id)).map(r => r.chat_id))];
+      const waChatIds = (await getActiveChatIds()).filter(id => id.length >= 10 && /^\d+$/.test(id));
       for (const chatId of waChatIds) {
         const settings = await getSettings(chatId);
         if (!settings.daily_digest) continue;
@@ -623,7 +663,7 @@ export function setupWhatsAppDigest() {
         if (activeStreaks.length > 0) {
           msg += '\n\n*Streaks:*';
           for (const s of activeStreaks.slice(0, 5)) {
-            msg += `\n  🔥 ${s.task_text} — ${s.current_streak} days`;
+            msg += `\n  🔥 ${s.reminder_text} — ${s.current_streak} days`;
           }
         }
 
