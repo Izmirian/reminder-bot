@@ -978,7 +978,12 @@ export async function getUpcomingBirthdays(chatId, daysAhead = 7) {
 // --- Journal ---
 
 export async function addJournalEntry(chatId, entry, mood) {
-  return insert('INSERT INTO journal (chat_id, entry, mood) VALUES (?, ?, ?)', [chatId, entry, mood || null]);
+  const id = await insert('INSERT INTO journal (chat_id, entry, mood) VALUES (?, ?, ?)', [chatId, entry, mood || null]);
+  try {
+    const { forwardToThoughtsAsync } = await import('./thoughts-forward.js');
+    forwardToThoughtsAsync({ chatId, text: entry, source: 'journal', sourceType: 'text', sourceRef: String(id) });
+  } catch {}
+  return id;
 }
 
 export async function getJournalEntries(chatId, fromDate, toDate) {
@@ -998,7 +1003,12 @@ export async function searchJournal(chatId, searchQuery) {
 // --- Memory (conversation facts) ---
 
 export async function addMemory(chatId, fact, category) {
-  return insert('INSERT INTO memory (chat_id, fact, category) VALUES (?, ?, ?)', [chatId, fact, category || null]);
+  const id = await insert('INSERT INTO memory (chat_id, fact, category) VALUES (?, ?, ?)', [chatId, fact, category || null]);
+  try {
+    const { forwardToThoughtsAsync } = await import('./thoughts-forward.js');
+    forwardToThoughtsAsync({ chatId, text: fact, source: 'memory', sourceType: 'text', sourceRef: String(id) });
+  } catch {}
+  return id;
 }
 
 export async function getMemories(chatId) {
