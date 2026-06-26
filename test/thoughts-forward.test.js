@@ -12,18 +12,19 @@ async function freshModule(env) {
   return import(`../src/thoughts-forward.js?cb=${Math.random()}`);
 }
 
-test('extractIdeaPrefix recognises idea:/thought:/# and strips the prefix', async () => {
+test('extractIdeaPrefix recognises idea:/thought:/note:/# and strips the prefix', async () => {
   const { extractIdeaPrefix } = await freshModule({});
   assert.equal(extractIdeaPrefix('idea: graphs are cool'), 'graphs are cool');
   assert.equal(extractIdeaPrefix('Thought:  scarcity drives decisions'), 'scarcity drives decisions');
+  assert.equal(extractIdeaPrefix('note: cheap flights are Tuesdays'), 'cheap flights are Tuesdays');
   assert.equal(extractIdeaPrefix('#quick spark'), 'quick spark');
   assert.equal(extractIdeaPrefix('idea:multi\nline'), 'multi\nline');
 });
 
-test('extractIdeaPrefix leaves non-idea messages (incl. "note:") alone', async () => {
+test('extractIdeaPrefix leaves non-prefixed messages alone', async () => {
   const { extractIdeaPrefix } = await freshModule({});
   assert.equal(extractIdeaPrefix('remind me at 5pm'), null);
-  assert.equal(extractIdeaPrefix('note: meeting moved'), null, 'note: stays a pin');
+  assert.equal(extractIdeaPrefix('notes app is great'), null, 'only a "note:" prefix counts');
   assert.equal(extractIdeaPrefix('#'), null);
   assert.equal(extractIdeaPrefix(''), null);
 });
@@ -54,10 +55,15 @@ test('chatAllowed is open when no allowlist and no owner number is set', async (
   assert.equal(chatAllowed('any-number'), true);
 });
 
-test('ideaCapturedReply reflects link results', async () => {
-  const { ideaCapturedReply } = await freshModule({});
-  assert.match(ideaCapturedReply({ ok: true, linkedCount: 0 }), /Captured/);
-  assert.match(ideaCapturedReply({ ok: true, linkedCount: 1 }), /1 related thought\b/);
-  assert.match(ideaCapturedReply({ ok: true, linkedCount: 3 }), /3 related thoughts/);
-  assert.match(ideaCapturedReply(null), /unreachable/);
+test('thoughtReply is unmistakable and reflects pin + graph outcome', async () => {
+  const { thoughtReply } = await freshModule({});
+  // pinned + in graph
+  assert.match(thoughtReply({ pinned: true, graph: { ok: true, linkedCount: 0 }, graphConfigured: true }), /Pinned & added to your idea graph/);
+  assert.match(thoughtReply({ pinned: true, graph: { ok: true, linkedCount: 2 }, graphConfigured: true }), /2 related thoughts/);
+  // pinned but graph configured-yet-unreachable: still confirms the pin (nothing lost)
+  assert.match(thoughtReply({ pinned: true, graph: null, graphConfigured: true }), /Pinned\b.*catch up/);
+  // pinned, graph not configured at all
+  assert.match(thoughtReply({ pinned: true, graph: null, graphConfigured: false }), /Pinned to your thoughts/);
+  // total failure surfaces a resend prompt, never a silent success
+  assert.match(thoughtReply({ pinned: false, graph: null, graphConfigured: false }), /Couldn't save/);
 });

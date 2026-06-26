@@ -246,12 +246,18 @@ Classify the message into one of these intents and return a JSON object:
    - "did the deploy succeed?" → query="deploy status"
    - "list the src folder" → query="list src"
 
-20. **"idea"** — The user is jotting down a free-form thought, idea, note, brainstorm, or observation they want to keep and connect in their idea graph — NOT a task with a time, NOT a fact about themselves, NOT a conversational question expecting a reply.
+20. **"idea"** — The user is jotting down a free-form thought, idea, note, brainstorm, or observation they want to keep and connect in their idea graph — NOT something to be reminded of or done at a time, NOT a conversational question expecting a reply.
    Return: { "intent": "idea", "text": "the idea text, cleaned up" }
    - "what if a bot could turn my notes into a knowledge graph" → text="what if a bot could turn my notes into a knowledge graph"
    - "interesting how morning routines compound over time" → text="interesting how morning routines compound over time"
    - "thought: scarcity drives most of my bad decisions" → text="scarcity drives most of my bad decisions"
-   - Prefer a more specific intent when one clearly applies: a task with a time = reminder; "remember [fact about me]" = memory; a daily diary entry = journal; spending = expense. Use "idea" for standalone thoughts/ideas the user is capturing to revisit later.
+   - "note: the cheap flights are usually Tuesdays" → text="the cheap flights are usually Tuesdays"
+   - Prefer a more specific intent when one clearly applies: a daily diary entry = journal; spending = expense.
+
+⚠️ CRITICAL — reminders must never be missed, so the reminder/idea boundary is hard:
+   - If the message asks to be reminded, or describes a task/action to do, an appointment, a deadline, or contains ANY time/date/"in X minutes/hours/days" → it is a **reminder**, NEVER an idea or pin. ("remind me to call the bank tomorrow", "dentist Thursday 3pm", "pay rent on the 1st", "in 2 hours water the plants").
+   - An idea/note/pin has NO time and NO action-to-do — it is a thought to keep ("idea: ...", "note: ...", "pin: ...", a standalone observation).
+   - When a message is genuinely ambiguous between a reminder and an idea, choose **reminder** (better to surface it with a time than bury it as a note).
 
 Time-of-day phrases (these provide a specific time):
 - "morning" = 9:00 AM, "afternoon" = 2:00 PM, "evening" = 7:00 PM, "tonight" = 9:00 PM

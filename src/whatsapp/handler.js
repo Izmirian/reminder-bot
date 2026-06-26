@@ -32,7 +32,8 @@ import {
 } from './scheduler.js';
 import { detectRecurringPattern } from '../patterns.js';
 import { getConversationalResponse } from '../conversation.js';
-import { forwardToThoughts, thoughtsEnabled, chatAllowed, extractIdeaPrefix, ideaCapturedReply } from '../thoughts-forward.js';
+import { forwardToThoughts, thoughtsEnabled, chatAllowed, extractIdeaPrefix, thoughtReply } from '../thoughts-forward.js';
+import { addPin, logAction } from '../db.js';
 import {
   handleListIntent, handleContactIntent, handleJournalIntent,
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
@@ -129,6 +130,28 @@ export async function handleTextMessage(from, text, quotedMsgId = null) {
       userQueues.delete(first);
     }
   }
+}
+
+// Capture a thought/idea/note: ALWAYS pin it (durable — so important things are
+// never lost even if the graph is down/unconfigured) AND add it to the idea graph
+// when configured. Reminders never reach this path. Returns the user-facing reply.
+async function captureThought(from, text, { mediaBuffer = null, mediaMime = null, sourceType = 'text', pinSource = 'idea' } = {}) {
+  const clean = (text || '').trim();
+  if (!clean && !mediaBuffer) return '⚠️ Nothing to capture.';
+
+  let pinned = false;
+  try {
+    const pinId = await addPin(from, clean || '(media note)', pinSource);
+    await logAction(from, 'pin', { id: pinId, content: clean });
+    pinned = true;
+  } catch (e) { console.error('[Capture] pin failed:', e.message); }
+
+  const graphConfigured = thoughtsEnabled() && chatAllowed(from);
+  let graph = null;
+  if (graphConfigured) {
+    graph = await forwardToThoughts({ chatId: from, text: clean, mediaBuffer, mediaMime, source: 'whatsapp', sourceType });
+  }
+  return thoughtReply({ pinned, graph, graphConfigured });
 }
 
 async function _handleTextMessage(from, text, quotedMsgId = null) {
@@ -292,14 +315,12 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
   if (lower.startsWith('/timezone') || lower.startsWith('timezone ')) return handleTimezone(from, text.trim());
   if (lower.startsWith('/digest') || lower.startsWith('digest ')) return handleDigest(from, text.trim());
 
-  // Explicit idea capture ("idea:", "thought:", "#…") — always goes to the graph
-  // (only for allowed senders; others fall through to normal handling).
-  if (thoughtsEnabled() && chatAllowed(from)) {
+  // Explicit thought capture ("idea:", "thought:", "note:", "#…") — pin + graph.
+  // Pins even if the graph is unconfigured, so nothing is lost. Gated by sender so
+  // strangers can't write to the owner's pins/graph; others fall through.
+  if (chatAllowed(from)) {
     const ideaText = extractIdeaPrefix(text);
-    if (ideaText) {
-      const result = await forwardToThoughts({ chatId: from, text: ideaText, source: 'whatsapp', sourceType: 'text' });
-      return sendTextMessage(from, ideaCapturedReply(result));
-    }
+    if (ideaText) return sendTextMessage(from, await captureThought(from, ideaText, { pinSource: 'note' }));
   }
 
   // --- AI-first intent classification ---
@@ -554,15 +575,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     if (aiResult.intent === 'journal') return sendTextMessage(from, await handleJournalIntent(from, aiResult, settings.timezone));
     if (aiResult.intent === 'memory') return sendTextMessage(from, await handleMemoryIntent(from, aiResult));
     if (aiResult.intent === 'idea' && chatAllowed(from)) {
-      const ideaText = aiResult.text || text.trim();
-      if (thoughtsEnabled()) {
-        const result = await forwardToThoughts({ chatId: from, text: ideaText, source: 'whatsapp', sourceType: 'text' });
-        return sendTextMessage(from, ideaCapturedReply(result));
-      }
-      // Graph not configured — keep the thought as a pin so nothing is lost.
-      const { addPin } = await import('../db.js');
-      await addPin(from, ideaText);
-      return sendTextMessage(from, '💡 Saved.');
+      return sendTextMessage(from, await captureThought(from, aiResult.text || text.trim(), { pinSource: 'idea' }));
     }
     if (aiResult.intent === 'expense') return sendTextMessage(from, await handleExpenseIntent(from, aiResult));
     if (aiResult.intent === 'timer') return sendTextMessage(from, handleTimerIntent(from, aiResult, (msg) => sendTextMessage(from, msg)));
@@ -576,7 +589,14 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
       }
       return sendTextMessage(from, result);
     }
-    if (aiResult.intent === 'pin') return sendTextMessage(from, await handlePinIntent(from, aiResult));
+    if (aiResult.intent === 'pin') {
+      // A saved pin/note IS a thought: pin it AND add it to the graph (allowed
+      // senders only). list/remove keep their existing behavior.
+      if (aiResult.action === 'save' && aiResult.content && chatAllowed(from)) {
+        return sendTextMessage(from, await captureThought(from, aiResult.content, { pinSource: 'note' }));
+      }
+      return sendTextMessage(from, await handlePinIntent(from, aiResult));
+    }
     if (aiResult.intent === 'followup') return sendTextMessage(from, await handleFollowupIntent(from, aiResult));
     if (aiResult.intent === 'research') return sendTextMessage(from, await handleResearchIntent(aiResult, from));
     if (aiResult.intent === 'email') {
@@ -1042,15 +1062,14 @@ export async function handleImageMessage(from, waMediaId, caption, mimeType) {
       imageBuffer = await downloadMedia(mediaUrl);
     }
 
-    // Explicit idea capture for a photo ("idea: …"/"#…" caption) → idea graph.
-    if (caption && imageBuffer && thoughtsEnabled() && chatAllowed(from)) {
+    // Explicit thought capture for a photo ("idea:/thought:/note:/#" caption) →
+    // pin the caption + add the image to the idea graph.
+    if (caption && imageBuffer && chatAllowed(from)) {
       const ideaCaption = extractIdeaPrefix(caption);
       if (ideaCaption !== null) {
-        const result = await forwardToThoughts({
-          chatId: from, text: ideaCaption, mediaBuffer: imageBuffer, mediaMime: mimeType,
-          source: 'whatsapp', sourceType: 'image',
-        });
-        return sendTextMessage(from, ideaCapturedReply(result));
+        return sendTextMessage(from, await captureThought(from, ideaCaption, {
+          mediaBuffer: imageBuffer, mediaMime: mimeType, sourceType: 'image', pinSource: 'note',
+        }));
       }
     }
 
