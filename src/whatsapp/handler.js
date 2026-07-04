@@ -39,7 +39,7 @@ import {
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
   buildDashboard, handleProjectIntent, handlePinIntent, handleFollowupIntent,
   handleResearchIntent, handleEmailIntent, handleUndo, checkConflicts,
-  orderRemindersForDisplay,
+  orderRemindersForDisplay, wantsListAfterAction,
 } from '../assistant.js';
 
 // Track state
@@ -436,6 +436,9 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
       if (aiResult.needsInfo) {
         return sendTextMessage(from, `🤔 ${aiResult.needsInfo}`);
       }
+      // "cancel a and show the list" — re-render after the action so the user
+      // sees the re-lettered list instead of referencing now-stale letters.
+      const wantsListAfter = wantsListAfterAction(text);
       const ids = aiResult.ids || [];
       if (aiResult.action === 'cancel') {
         // For "cancel all/everything", use the active list as source of truth (AI ids may be stale)
@@ -460,8 +463,8 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         if (names.length === 0) {
           return sendTextMessage(from, `Couldn't find those reminders. Active:\n${activeRems.map(r => `  • ${r.text}`).join('\n') || '  (none)'}`);
         }
-        if (names.length === 1) return sendTextMessage(from, `❌ Cancelled "${names[0]}"`);
-        return sendTextMessage(from, `❌ Cancelled ${names.length} reminders:\n${names.map(n => `  • ${n}`).join('\n')}`);
+        if (names.length === 1) return confirmActionAndMaybeList(from, `❌ Cancelled "${names[0]}"`, wantsListAfter);
+        return confirmActionAndMaybeList(from, `❌ Cancelled ${names.length} reminders:\n${names.map(n => `  • ${n}`).join('\n')}`, wantsListAfter);
       }
       if (aiResult.action === 'reschedule') {
         try {
@@ -497,7 +500,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
           if (results.length > 0) {
             let msg = `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`;
             if (notFound.length > 0) msg += `\n\n(Couldn't find: ${notFound.join(', ')})`;
-            return sendTextMessage(from, msg);
+            return confirmActionAndMaybeList(from, msg, wantsListAfter);
           }
           return sendTextMessage(from, `Couldn't find those reminders to reschedule. Active: ${activeRems.map(r => `#${r.id} ${r.text}`).join(', ')}`);
         } catch (err) {
@@ -523,8 +526,8 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
         if (updated.length === 0) {
           return sendTextMessage(from, `Couldn't find those reminders to edit. Active:\n${activeRems.map(r => `  • ${r.text}`).join('\n') || '  (none)'}`);
         }
-        if (updated.length === 1) return sendTextMessage(from, `✅ Updated "${updated[0]}" → "${aiResult.newText}"`);
-        return sendTextMessage(from, `✅ Updated ${updated.length} reminders to "${aiResult.newText}"`);
+        if (updated.length === 1) return confirmActionAndMaybeList(from, `✅ Updated "${updated[0]}" → "${aiResult.newText}"`, wantsListAfter);
+        return confirmActionAndMaybeList(from, `✅ Updated ${updated.length} reminders to "${aiResult.newText}"`, wantsListAfter);
       }
       if (aiResult.action === 'complete') {
         const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
@@ -557,8 +560,8 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
           }
           return sendTextMessage(from, `Couldn't find those specific reminders. Your active ones:\n${activeRems.map(r => `  • ${r.text}`).join('\n')}\n\nReply "done with [name]" or "mark all as done".`);
         }
-        if (completed.length === 1) return sendTextMessage(from, `✅ Done: "${completed[0]}"`);
-        return sendTextMessage(from, `✅ Marked ${completed.length} as done:\n${completed.map(t => `  • ${t}`).join('\n')}`);
+        if (completed.length === 1) return confirmActionAndMaybeList(from, `✅ Done: "${completed[0]}"`, wantsListAfter);
+        return confirmActionAndMaybeList(from, `✅ Marked ${completed.length} as done:\n${completed.map(t => `  • ${t}`).join('\n')}`, wantsListAfter);
       }
       if (aiResult.action === 'add_note') {
         if (ids.length === 0) {
@@ -573,7 +576,7 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
           }
         }
         if (added.length === 0) return sendTextMessage(from, "Couldn't find those reminders to add a note to.");
-        return sendTextMessage(from, `📝 Note added to ${added.length === 1 ? `"${added[0]}"` : `${added.length} reminders`}: ${aiResult.note}`);
+        return confirmActionAndMaybeList(from, `📝 Note added to ${added.length === 1 ? `"${added[0]}"` : `${added.length} reminders`}: ${aiResult.note}`, wantsListAfter);
       }
     }
 
@@ -945,6 +948,14 @@ async function sendHelp(to) {
     '• *Voice notes:* just send one — I\'ll transcribe it\n\n' +
     '*Settings:*\n• *quiet hours 11pm to 8am* — hold non-urgent reminders overnight\n• *timezone Asia/Dubai* · *digest on*/*off* · *set location Amman*\n• *connect calendar* · *dashboard*'
   );
+}
+
+// Send an action confirmation, then re-render the list when the user asked for
+// it in the same breath ("cancel a and show the list"). Re-rendering surfaces
+// the freshly re-lettered list so the next letter reference resolves correctly.
+async function confirmActionAndMaybeList(to, msg, wantsList) {
+  await sendTextMessage(to, msg);
+  if (wantsList) await sendList(to);
 }
 
 async function sendList(to) {

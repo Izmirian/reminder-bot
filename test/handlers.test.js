@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSnooze, detectCategory, toCronExpr } from '../src/parser.js';
-import { orderRemindersForDisplay } from '../src/assistant.js';
+import { orderRemindersForDisplay, wantsListAfterAction } from '../src/assistant.js';
 
 // The exact bulk-detection the handlers use to decide "operate on ALL reminders".
 // Kept in sync with src/whatsapp/handler.js and src/index.js. Tightened so a
@@ -162,4 +162,36 @@ test('orderRemindersForDisplay: cron+null remind_at buckets as recurring, not no
   // It has a cron, so it is schedulable/recurring — must NOT be treated as a no-time item.
   assert.deepEqual(ordered.map(r => r.id), [1]);
   assert.ok(isSchedulable(ordered[0]));
+});
+
+// Compound "do X then show the list" detection. After a letter-based action
+// (complete/cancel/edit) the letters re-shift, so when the user tacks on
+// "then show list again" the handler must re-render the list — otherwise the
+// user references stale letters on their next message. Shared helper so both
+// platforms and this test agree on exactly which phrasings trigger it.
+test('wantsListAfterAction matches compound "then show the list" requests', () => {
+  for (const phrase of [
+    'set b as complete then show list again',
+    'cancel a and show the list',
+    'mark gym done then show me the list',
+    'complete a, then list again',
+    'done with dentist and show updated list',
+    'cancel b then list now',
+    'finish the call then view the list',
+  ]) {
+    assert.ok(wantsListAfterAction(phrase), `expected list-after match: "${phrase}"`);
+  }
+});
+
+test('wantsListAfterAction does NOT match plain actions or incidental "list" text', () => {
+  for (const phrase of [
+    'done with gold exchange',
+    'cancel the grocery list reminder',   // "list" is part of the reminder name, no show-verb
+    'mark b as complete',
+    'cancel a',
+    'add milk to my shopping list',        // a list-intent, not an action follow-up
+    'reschedule the checklist review to 3pm',
+  ]) {
+    assert.equal(wantsListAfterAction(phrase), false, `should not match: "${phrase}"`);
+  }
 });
