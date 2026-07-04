@@ -965,9 +965,9 @@ async function sendList(to) {
 
   const letters = 'abcdefghijklmnopqrstuvwxyz';
   let idx = 0;
-  let msg = '📋 *Your Reminders*\n';
+  let msg = '📋 *Your Reminders*';
   if (today.length > 0) {
-    msg += '\n*Today:*\n';
+    msg += '\n\n*Today:*\n';
     for (const r of today) {
       const time = new Date(r.remind_at).toLocaleTimeString('en-US', { timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true });
       const rel = relativeTime(new Date(r.remind_at));
@@ -976,7 +976,7 @@ async function sendList(to) {
     }
   }
   if (upcoming.length > 0) {
-    msg += '\n*Upcoming:*\n';
+    msg += '\n\n*Upcoming:*\n';
     for (const r of upcoming) {
       const time = formatTime(r.remind_at, settings.timezone);
       const rel = relativeTime(new Date(r.remind_at));
@@ -985,19 +985,19 @@ async function sendList(to) {
     }
   }
   if (recurring.length > 0) {
-    msg += '\n*Recurring:*\n';
+    msg += '\n\n*Recurring:*\n';
     for (const r of recurring) {
       msg += `  *${letters[idx++]})* ${r.text}\n    🔁 ${r.cron_expr}\n`;
     }
   }
   if (noTime.length > 0) {
-    msg += '\n*No time set:*\n';
+    msg += '\n\n*No time set:*\n';
     for (const r of noTime) {
       msg += `  *${letters[idx++]})* ${r.text}\n    📝 give it a time anytime\n`;
     }
   }
   if (paused.length > 0) {
-    msg += `\n*Paused (${paused.length}):*\n`;
+    msg += `\n\n*Paused (${paused.length}):*\n`;
     for (const r of paused) msg += `  ${r.text}\n`;
     msg += '\n_Send "resume" to reactivate._';
   }

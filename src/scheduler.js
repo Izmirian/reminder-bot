@@ -102,7 +102,20 @@ function buildSnoozeKeyboard(reminderId, snoozeCount = 0) {
   };
 }
 
+// Reminder ids currently being fired — dedups the setTimeout-vs-missed-cron race
+// where both trigger before markReminderFired commits, causing a duplicate send.
+const firingNow = new Set();
 async function fireReminder(reminder) {
+  if (firingNow.has(reminder.id)) return; // already firing this reminder — skip the duplicate
+  firingNow.add(reminder.id);
+  try {
+    await _fireReminder(reminder);
+  } finally {
+    firingNow.delete(reminder.id);
+  }
+}
+
+async function _fireReminder(reminder) {
   if (!botInstance) return;
 
   // Context-aware message
@@ -134,8 +147,8 @@ async function fireReminder(reminder) {
     const { getNoTimeReminders } = await import('./db.js');
     const noTime = await getNoTimeReminders(reminder.chat_id);
     if (noTime.length > 0) {
-      message += `\n\n📝 *On your list (no time):*${noTime.slice(0, 5).map(r => `\n  • ${r.text}`).join('')}`;
-      if (noTime.length > 5) message += `\n  …+${noTime.length - 5} more`;
+      message += `\n\n———\n📝 *On your list (no time):*${noTime.slice(0, 10).map(r => `\n  • ${r.text}`).join('')}`;
+      if (noTime.length > 10) message += `\n  …and ${noTime.length - 10} more — say "list"`;
     }
   } catch (e) { console.error('[Fire] no-time append:', e.message); }
   const options = buildSnoozeKeyboard(reminder.id, reminder.snooze_count || 0);

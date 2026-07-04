@@ -148,10 +148,10 @@ export async function handleList(bot, msg) {
 
   const letters = 'abcdefghijklmnopqrstuvwxyz';
   let idx = 0;
-  let message = '📋 *Your Reminders*\n';
+  let message = '📋 *Your Reminders*';
 
   if (today.length > 0) {
-    message += '\n*Today:*\n';
+    message += '\n\n*Today:*\n';
     for (const r of today) {
       const time = new Date(r.remind_at).toLocaleTimeString('en-US', {
         timeZone: settings.timezone, hour: '2-digit', minute: '2-digit', hour12: true,
@@ -163,7 +163,7 @@ export async function handleList(bot, msg) {
   }
 
   if (upcoming.length > 0) {
-    message += '\n*Upcoming:*\n';
+    message += '\n\n*Upcoming:*\n';
     for (const r of upcoming) {
       const time = formatTime(r.remind_at, settings.timezone);
       const rel = relativeTime(new Date(r.remind_at));
@@ -173,21 +173,21 @@ export async function handleList(bot, msg) {
   }
 
   if (recurring.length > 0) {
-    message += '\n*Recurring:*\n';
+    message += '\n\n*Recurring:*\n';
     for (const r of recurring) {
       message += `  *${letters[idx++]})* ${r.text}\n    🔁 ${r.cron_expr}\n`;
     }
   }
 
   if (noTime.length > 0) {
-    message += '\n*No time set:*\n';
+    message += '\n\n*No time set:*\n';
     for (const r of noTime) {
       message += `  *${letters[idx++]})* ${r.text}\n    📝 give it a time anytime\n`;
     }
   }
 
   if (paused.length > 0) {
-    message += `\n*⏸️ Paused (${paused.length}):*\n`;
+    message += `\n\n*⏸️ Paused (${paused.length}):*\n`;
     for (const r of paused) {
       message += `  *#${r.id}* ${r.text}\n`;
     }

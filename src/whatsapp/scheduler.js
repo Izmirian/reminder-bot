@@ -38,7 +38,20 @@ function getNextCronDate() {
   return next;
 }
 
+// Reminder ids currently being fired — dedups the setTimeout-vs-missed-cron race
+// where both trigger before markReminderFired commits, causing a duplicate send.
+const firingNow = new Set();
 async function fireReminder(reminder) {
+  if (firingNow.has(reminder.id)) return; // already firing this reminder — skip the duplicate
+  firingNow.add(reminder.id);
+  try {
+    await _fireReminder(reminder);
+  } finally {
+    firingNow.delete(reminder.id);
+  }
+}
+
+async function _fireReminder(reminder) {
   let contextMsg = ''; // hoisted so the shared-recipients block (after the catch) can use it
   try {
     const settings = await getSettings(reminder.chat_id);
@@ -71,8 +84,8 @@ async function fireReminder(reminder) {
       const { getNoTimeReminders } = await import('../db.js');
       const noTime = await getNoTimeReminders(reminder.chat_id);
       if (noTime.length > 0) {
-        contextMsg += `\n\n📝 *On your list (no time):*${noTime.slice(0, 5).map(r => `\n  • ${r.text}`).join('')}`;
-        if (noTime.length > 5) contextMsg += `\n  …+${noTime.length - 5} more`;
+        contextMsg += `\n\n———\n📝 *On your list (no time):*${noTime.slice(0, 10).map(r => `\n  • ${r.text}`).join('')}`;
+        if (noTime.length > 10) contextMsg += `\n  …and ${noTime.length - 10} more — say "list"`;
       }
     } catch (e) { console.error('[WA Fire] no-time append:', e.message); }
 
