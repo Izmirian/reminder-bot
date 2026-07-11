@@ -67,6 +67,19 @@ export function thoughtReply({ pinned, graph, graphConfigured }) {
  * @param {string} [p.sourceRef]       - external id for idempotent backfill
  * @returns {Promise<object|null>} ingest result ({ ok, id, linkedCount, ... }) or null
  */
+// Forwarding health, kept in memory for the /health endpoint: timestamps + last
+// HTTP code only — never message content or the ingest URL.
+const forwardStats = { lastOkAt: null, lastErrorAt: null, lastErrorCode: null };
+
+export function getForwardStats() {
+  return { ...forwardStats };
+}
+
+function recordForwardResult(ok, code = null) {
+  if (ok) forwardStats.lastOkAt = new Date().toISOString();
+  else { forwardStats.lastErrorAt = new Date().toISOString(); forwardStats.lastErrorCode = code; }
+}
+
 export async function forwardToThoughts({ chatId, text = null, mediaBuffer = null, mediaMime = null,
   source = 'whatsapp', sourceType = 'text', sourceRef = null }, retries = 3) {
   if (!thoughtsEnabled()) return null;
@@ -86,16 +99,18 @@ export async function forwardToThoughts({ chatId, text = null, mediaBuffer = nul
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30000),
       });
-      if (res.ok) return res.json();
+      if (res.ok) { recordForwardResult(true); return res.json(); }
       if ((res.status === 429 || res.status >= 500) && i < retries - 1) {
         await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
         continue;
       }
       console.error(`[Thoughts] ingest ${res.status}:`, await res.text().catch(() => ''));
+      recordForwardResult(false, res.status);
       return null;
     } catch (err) {
       if (i < retries - 1) { await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000)); continue; }
       console.error('[Thoughts] forward failed:', err.message);
+      recordForwardResult(false, 0); // 0 = network/timeout
       return null;
     }
   }
