@@ -25,7 +25,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | `src/scheduler.js` | Telegram reminder scheduler, daily digest, birthday checks, cleanup crons, idle check-in, EOD recap, week planning, follow-up alerts |
 | `src/index.js` | Telegram bot — message handler, callback queries, all 18 intent routing, photo/document/forward handling |
 | `src/whatsapp/handler.js` | WhatsApp message handler — mirrors Telegram with all 18 intent routing, photo/document analysis |
-| `src/whatsapp/webhook.js` | Express server — Meta webhook with HMAC signature verification, message deduplication, Google OAuth routes, health check |
+| `src/whatsapp/webhook.js` | Express server — Meta webhook with HMAC signature verification, message deduplication, Google OAuth routes, `/` liveness + `GET /health` (db ping + Thoughts reachability + forward stats, consumed by the Thoughts status page) |
 | `src/whatsapp/scheduler.js` | WhatsApp reminder scheduler, digest, birthday checks, idle check-in, EOD recap, week planning, follow-up alerts |
 | `src/whatsapp/api.js` | WhatsApp Cloud API client — fetchWithRetry (exponential backoff), send text/buttons/images, mark read, upload/download media (20MB cap) |
 | `src/google-calendar.js` | Google Calendar OAuth2, event CRUD, two-way sync, transient retry on 5xx |
