@@ -48,10 +48,14 @@ export function thoughtReply({ pinned, graph, graphConfigured }) {
   const linked = graph?.ok && graph.linkedCount > 0
     ? ` — linked to ${graph.linkedCount} related thought${graph.linkedCount > 1 ? 's' : ''}`
     : '';
-  if (pinned && graph?.ok) return `📌 Pinned & added to your idea graph${linked}.`;
+  // Resurface the strongest related older idea at the moment of capture.
+  const echo = graph?.ok && graph.topNeighbor?.content
+    ? `\n↪ relates to: "${graph.topNeighbor.content}"${graph.topNeighbor.createdAt ? ` (${String(graph.topNeighbor.createdAt).slice(0, 10)})` : ''}`
+    : '';
+  if (pinned && graph?.ok) return `📌 Pinned & added to your idea graph${linked}.${echo}`;
   if (pinned && graphConfigured) return `📌 Pinned. (Idea graph unreachable right now — it'll catch up.)`;
   if (pinned) return `📌 Pinned to your thoughts.`;
-  if (graph?.ok) return `🧠 Added to your idea graph${linked}.`;
+  if (graph?.ok) return `🧠 Added to your idea graph${linked}.${echo}`;
   return `⚠️ Couldn't save that — please resend.`;
 }
 
@@ -121,4 +125,84 @@ export async function forwardToThoughts({ chatId, text = null, mediaBuffer = nul
 export function forwardToThoughtsAsync(payload) {
   if (!thoughtsEnabled()) return;
   forwardToThoughts(payload).catch(e => console.error('[Thoughts] async forward:', e.message));
+}
+
+/** Shared secret-authenticated call to a Thoughts endpoint. Returns body or null. */
+async function callThoughts(path, { method = 'GET', body = null, timeoutMs = 30000 } = {}) {
+  if (!thoughtsEnabled()) return null;
+  try {
+    const res = await fetch(`${INGEST_URL.replace(/\/$/, '')}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'x-ingest-secret': INGEST_SECRET },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) { console.error(`[Thoughts] ${path} ${res.status}`); return null; }
+    return await res.json();
+  } catch (e) {
+    console.error(`[Thoughts] ${path} failed:`, e.message);
+    return null;
+  }
+}
+
+/** "Ask my brain": semantic Q&A over the user's captured notes. */
+export async function askThoughts(chatId, question) {
+  if (!chatAllowed(chatId)) return null;
+  return callThoughts('/api/ask', { method: 'POST', body: { chatId, question }, timeoutMs: 45000 });
+}
+
+/** Weekly-digest data (bot formats + delivers). */
+export async function fetchThoughtsDigest(chatId) {
+  return callThoughts(`/api/digest?chat=${encodeURIComponent(chatId)}`, { timeoutMs: 15000 });
+}
+
+/** Seed a structured entity (e.g. a saved contact) as a graph hub-node. */
+export function seedThoughtsEntity(chatId, name, type = 'person') {
+  if (!chatAllowed(chatId)) return;
+  callThoughts('/api/entity-seed', { method: 'POST', body: { chatId, name, type }, timeoutMs: 10000 })
+    .catch(() => {});
+}
+
+/**
+ * Format the weekly idea digest from /api/digest data. Pure (unit-tested).
+ * Returns null when there's too little to say (caller skips silently).
+ */
+export function formatDigestMessage(d) {
+  if (!d?.ok || (d.ideaCount || 0) < 3) return null;
+  let msg = `🧠 *Your ideas this week*\n`;
+  msg += d.newThisWeek > 0
+    ? `${d.newThisWeek} new thought${d.newThisWeek > 1 ? 's' : ''} captured (${d.ideaCount} total).`
+    : `No new thoughts this week (${d.ideaCount} total) — send one with "idea: …"`;
+  if (d.hottestCluster?.label) {
+    msg += `\n\n🔥 *Hottest theme:* ${d.hottestCluster.label} (${d.hottestCluster.size} ideas)`;
+    if (d.hottestCluster.summary) msg += `\n_${d.hottestCluster.summary}_`;
+  }
+  if (d.bridge?.relation) {
+    msg += `\n\n🔗 *Newest connection:* "${(d.bridge.src_content || '').slice(0, 60)}" ${d.bridge.relation} "${(d.bridge.dst_content || '').slice(0, 60)}"`;
+    if (d.bridge.reason) msg += ` — _${d.bridge.reason}_`;
+  }
+  if (d.resurface?.content) {
+    const date = d.resurface.created_at ? String(d.resurface.created_at).slice(0, 10) : '';
+    msg += `\n\n💭 *Worth revisiting:* "${(d.resurface.content || '').slice(0, 100)}"${date ? ` _(${date})_` : ''}`;
+  }
+  return msg;
+}
+
+/**
+ * Format an /api/ask result for WhatsApp/Telegram. Pure (unit-tested).
+ * Honest miss and degraded (no-answer, sources-only) shapes handled.
+ */
+export function formatAskReply(result, question) {
+  if (!result?.ok) return '🧠 Your idea graph is unreachable right now — try again in a minute.';
+  if (!result.sources?.length) {
+    return `🧠 Nothing in your notes about that yet. Capture thoughts with "idea: …" and I'll remember them.`;
+  }
+  const src = result.sources.slice(0, 3).map(s => {
+    const date = s.createdAt ? String(s.createdAt).slice(0, 10) : '';
+    return `• "${(s.content || '').slice(0, 90)}"${date ? ` _(${date})_` : ''}`;
+  }).join('\n');
+  const head = result.answer
+    ? `🧠 ${result.answer}`
+    : `🧠 Here's what your notes say about that:`;
+  return `${head}\n\n*From your notes:*\n${src}`;
 }

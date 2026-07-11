@@ -839,8 +839,24 @@ export async function deactivateMonitor(id, chatId) {
 // --- Documents ---
 
 export async function saveDocument(chatId, filename, description, mediaType, mediaData) {
-  return insert('INSERT INTO documents (chat_id, filename, description, media_type, media_data) VALUES (?, ?, ?, ?, ?)',
+  const id = await insert('INSERT INTO documents (chat_id, filename, description, media_type, media_data) VALUES (?, ?, ?, ?, ?)',
     [chatId, filename, description || null, mediaType || null, mediaData || null]);
+  // Saved documents become idea-graph nodes: Thoughts analyzes the content
+  // (Claude vision/PDF) into embeddable text. Fire-and-forget; no-op if unconfigured.
+  try {
+    const { forwardToThoughtsAsync } = await import('./thoughts-forward.js');
+    const isPdf = (mediaType || '').includes('pdf');
+    forwardToThoughtsAsync({
+      chatId,
+      text: [filename, description].filter(Boolean).join(' — '),
+      mediaBuffer: mediaData || null,
+      mediaMime: mediaType || null,
+      source: 'document',
+      sourceType: mediaData ? (isPdf ? 'document' : 'image') : 'text',
+      sourceRef: String(id),
+    });
+  } catch {}
+  return id;
 }
 
 export async function getDocuments(chatId) {
@@ -956,7 +972,14 @@ export async function upsertContact(chatId, name, notes, birthday) {
     if (birthday) await run('UPDATE contacts SET birthday = ? WHERE id = ?', [birthday, existing.id]);
     return existing.id;
   }
-  return insert('INSERT INTO contacts (chat_id, name, notes, birthday) VALUES (?, ?, ?, ?)', [chatId, name, notes || null, birthday || null]);
+  const id = await insert('INSERT INTO contacts (chat_id, name, notes, birthday) VALUES (?, ?, ?, ?)', [chatId, name, notes || null, birthday || null]);
+  // New contacts become person hub-nodes in the idea graph, so enrichment can
+  // link ideas that mention them. Fire-and-forget; no-op if unconfigured.
+  try {
+    const { seedThoughtsEntity } = await import('./thoughts-forward.js');
+    seedThoughtsEntity(chatId, name, 'person');
+  } catch {}
+  return id;
 }
 
 export async function getContact(chatId, name) {
