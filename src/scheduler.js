@@ -433,6 +433,18 @@ export function setupDailyDigest() {
         } else {
           msg += '\n\nNothing scheduled for tomorrow.';
         }
+
+        // Business signals: unusual category spend + aging follow-ups.
+        try {
+          const { getExpensesByCategory, getPendingFollowups } = await import('./db.js');
+          const { expenseAnomalies, agingFollowups, businessSignalsSection } = await import('./insights.js');
+          const signals = businessSignalsSection(
+            expenseAnomalies(await getExpensesByCategory(chatId, 7), await getExpensesByCategory(chatId, 35)),
+            agingFollowups(await getPendingFollowups(chatId)),
+          );
+          if (signals) msg += signals;
+        } catch (e) { console.error('[EOD Signals]', e.message); }
+
         msg += '\n\nGood night!';
         botInstance.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(e => console.error("[Send]", e.message));
       }

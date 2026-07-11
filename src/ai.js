@@ -256,6 +256,14 @@ Classify the message into one of these intents and return a JSON object:
    - "note: the cheap flights are usually Tuesdays" → text="the cheap flights are usually Tuesdays"
    - Prefer a more specific intent when one clearly applies: a daily diary entry = journal; spending = expense.
 
+21. **"recall"** — The user is asking a question about their OWN past ideas/notes/thoughts (the idea graph), wanting them found and summarized.
+   Return: { "intent": "recall", "question": "the question, cleaned up" }
+   - "what were my ideas about giveaways?" → question="what were my ideas about giveaways"
+   - "have I thought about inventory sorting before?" → question="have I thought about inventory sorting before"
+   - "what do my notes say about the diamond app?" → question="what do my notes say about the diamond app"
+   - "search my ideas for marketing" → question="marketing"
+   - Distinguish carefully: "what car do I have?" (a stored personal fact) = memory recall; "find my dentist reminder" = search (reminders); questions about their captured IDEAS/NOTES/THOUGHTS = recall.
+
 ⚠️ CRITICAL — reminders must never be missed, so the reminder/idea boundary is hard:
    - If the message asks to be reminded, or describes a task/action to do, an appointment, a deadline, or contains ANY time/date/"in X minutes/hours/days" → it is a **reminder**, NEVER an idea or pin. ("remind me to call the bank tomorrow", "dentist Thursday 3pm", "pay rent on the 1st", "in 2 hours water the plants").
    - An idea/note/pin has NO time and NO action-to-do — it is a thought to keep ("idea: ...", "note: ...", "pin: ...", a standalone observation).

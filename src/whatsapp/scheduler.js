@@ -565,6 +565,18 @@ export function setupWhatsAppDigest() {
             msg += `\n  ${time} — ${r.text}`;
           }
         }
+        // Business signals: unusual category spend + aging follow-ups (quiet
+        // unless the signal is strong — see insights.js thresholds).
+        try {
+          const { getExpensesByCategory, getPendingFollowups } = await import('../db.js');
+          const { expenseAnomalies, agingFollowups, businessSignalsSection } = await import('../insights.js');
+          const signals = businessSignalsSection(
+            expenseAnomalies(await getExpensesByCategory(chatId, 7), await getExpensesByCategory(chatId, 35)),
+            agingFollowups(await getPendingFollowups(chatId)),
+          );
+          if (signals) msg += signals;
+        } catch (e) { console.error('[WA EOD Signals]', e.message); }
+
         msg += '\n\nGood night!';
         sendTextMessage(chatId, msg).catch(e => console.error("[Send]", e.message));
       }
@@ -596,6 +608,24 @@ export function setupWhatsAppDigest() {
         sendTextMessage(chatId, msg).catch(e => console.error("[Send]", e.message));
       }
     } catch (err) { console.error('[WA Week Planning]', err.message); }
+  });
+
+  // Weekly idea digest — Sunday 7:20pm (after week planning), from the Thoughts
+  // graph: hottest theme, newest connection, one idea worth revisiting. Skips
+  // silently when the graph is unconfigured/unreachable/too small, or in quiet hours.
+  cron.schedule('20 19 * * 0', async () => {
+    try {
+      const { thoughtsEnabled, chatAllowed, fetchThoughtsDigest, formatDigestMessage } = await import('../thoughts-forward.js');
+      if (!thoughtsEnabled()) return;
+      const waChatIds = (await getActiveChatIds()).filter(id => id.length >= 10 && /^\d+$/.test(id) && chatAllowed(id));
+      for (const chatId of waChatIds) {
+        const settings = await getSettings(chatId);
+        const { isQuietNow } = await import('../quiet.js');
+        if (isQuietNow(settings)) continue;
+        const msg = formatDigestMessage(await fetchThoughtsDigest(chatId));
+        if (msg) sendTextMessage(chatId, msg).catch(e => console.error('[Send]', e.message));
+      }
+    } catch (err) { console.error('[WA Idea Digest]', err.message); }
   });
 
   // URL monitor check — every 30 minutes (WhatsApp recipients)

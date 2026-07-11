@@ -27,9 +27,10 @@ async function main() {
 
   const journals = (await pool.query('SELECT chat_id, id, entry AS text FROM journal ORDER BY id')).rows;
   const memories = (await pool.query('SELECT chat_id, id, fact AS text FROM memory ORDER BY id')).rows;
+  const pins = (await pool.query('SELECT chat_id, id, content AS text FROM pins ORDER BY id')).rows;
 
   let sent = 0, created = 0;
-  for (const [source, rows] of [['journal', journals], ['memory', memories]]) {
+  for (const [source, rows] of [['journal', journals], ['memory', memories], ['pin', pins]]) {
     for (const row of rows) {
       if (!row.text) continue;
       const r = await forwardToThoughts({
@@ -39,7 +40,15 @@ async function main() {
     }
   }
 
-  console.log(`[Backfill] Forwarded ${sent} entries (${created} newly created, rest already present).`);
+  // Contacts become person hub-nodes (entities, not ideas) — idempotent upsert.
+  const contacts = (await pool.query('SELECT chat_id, name FROM contacts ORDER BY id')).rows;
+  const { seedThoughtsEntity } = await import('../src/thoughts-forward.js');
+  for (const c of contacts) {
+    if (c.name) { seedThoughtsEntity(c.chat_id, c.name, 'person'); sent++; }
+  }
+  await new Promise(r => setTimeout(r, 3000)); // let fire-and-forget seeds flush
+
+  console.log(`[Backfill] Forwarded ${sent} entries (${created} newly created ideas; entity seeds are idempotent).`);
   await pool.end();
   process.exit(0);
 }
