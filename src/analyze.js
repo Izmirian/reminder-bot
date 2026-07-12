@@ -24,7 +24,7 @@ export async function analyzeImage(imageBuffer, mimeType, prompt) {
     const userPrompt = prompt || 'Analyze this document/image. Provide a clear summary of its contents. If it contains text, extract the key information. If it is a receipt, list the items and totals. If it is a form or official document, summarize the important details.';
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5',
       max_tokens: 1000,
       messages: [{
         role: 'user',
@@ -63,7 +63,7 @@ export async function analyzePdfBuffer(pdfBuffer, prompt) {
     const userPrompt = prompt || 'Analyze this PDF document. Provide a comprehensive summary of its contents, key points, and any important details.';
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5',
       max_tokens: 1500,
       messages: [{
         role: 'user',
@@ -101,7 +101,7 @@ export async function scanReceipt(imageBuffer, mimeType) {
     const mediaType = mimeType.includes('png') ? 'image/png' : 'image/jpeg';
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5',
       max_tokens: 300,
       messages: [{
         role: 'user',

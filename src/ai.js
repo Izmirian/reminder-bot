@@ -351,13 +351,13 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
 
     // Use Haiku for simple intents (cheaper), Sonnet for complex ones
     const needsSonnet = needsFullContext || /summariz|research|compar|analyz|translate|explain|draft.*email|switch.*(?:and|\+)|\b(?:move|change|reschedule|shift|push).*(?:and|\+)/i.test(lowerMsg);
-    const model = needsSonnet ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20251001';
+    const model = needsSonnet ? 'claude-sonnet-5' : 'claude-haiku-4-5-20251001';
     const maxTokens = needsSonnet ? 800 : 400;
 
     const response = await api.messages.create({
       model,
       max_tokens: maxTokens,
-      temperature: 0.3,
+      ...(needsSonnet ? {} : { temperature: 0.3 }),
       system: buildPrompt(activeReminders),
       messages,
     });
@@ -371,9 +371,9 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
       result = JSON.parse(text);
     } catch (parseErr) {
       // If Haiku returned bad JSON, retry with Sonnet once
-      if (model !== 'claude-sonnet-4-20250514') {
+      if (model !== 'claude-sonnet-5') {
         console.warn(`[AI] Haiku JSON parse failed, retrying with Sonnet`);
-        const retryRes = await api.messages.create({ model: 'claude-sonnet-4-20250514', max_tokens: 800, temperature: 0.3, system: buildPrompt(activeReminders), messages });
+        const retryRes = await api.messages.create({ model: 'claude-sonnet-5', max_tokens: 800, system: buildPrompt(activeReminders), messages });
         let retryText = retryRes.content[0]?.text;
         if (retryText) {
           retryText = retryText.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
