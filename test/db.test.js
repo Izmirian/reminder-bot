@@ -111,3 +111,29 @@ test('logCompletedReminder tolerates a null remindAt (no-time completion, no epo
   // Must not throw; the day/hour/minute columns must be NULL, not 1970 epoch values.
   await db.logCompletedReminder({ chatId: TEST_CHAT, text: 'ci no-time completion', remindAt: null });
 });
+
+// --- Chat-memory: pgvector schema + write path ---
+
+test('chat_history embedding column accepts a synthetic 512-dim vector (pgvector schema check)', { skip: !hasDb }, async () => {
+  const chatId = TEST_CHAT + '-vector-write';
+  const vec = Array(512).fill(0); vec[0] = 1;
+  const id = await db.addChatMessage(chatId, 'user', 'pgvector schema probe');
+  assert.equal(typeof id, 'number');
+  await db.storeEmbedding(id, vec); // throws if the extension/column/cast don't work
+});
+
+test('addChatMessage returns the new row id', { skip: !hasDb }, async () => {
+  const id = await db.addChatMessage(TEST_CHAT + '-id-check', 'user', 'id check');
+  assert.equal(typeof id, 'number');
+  assert.ok(id > 0);
+});
+
+const hasVoyageKey = !!process.env.VOYAGE_API_KEY;
+
+test('embedAndStoreMessage: end-to-end with a real Voyage embedding', { skip: !hasDb || !hasVoyageKey }, async () => {
+  const chatId = TEST_CHAT + '-live-embed';
+  const text = 'I love hiking in the mountains every weekend';
+  const id = await db.addChatMessage(chatId, 'user', text);
+  const ok = await db.embedAndStoreMessage(id, text);
+  assert.equal(ok, true);
+});
