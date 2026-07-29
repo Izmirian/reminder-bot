@@ -279,37 +279,48 @@ async function initPostgres() {
   // Add currency to expenses
   try { await pool.query(`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'JOD'`); } catch (e) { console.error('[DB] Migration:', e.message); }
 
-  // Migrations
-  try {
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal'`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS fire_count INTEGER DEFAULT 0`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS shared_with TEXT`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS created_by TEXT`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS google_event_id TEXT`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
-    // Column must exist before the purge below can reference it — on a fresh
-    // database (e.g. CI's ephemeral Postgres) these ran in the opposite order,
-    // so the UPDATE threw "column does not exist" and silently aborted every
-    // migration after it in this block (caught below, never surfaced).
-    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
-    // Purge legacy 'null'-string google_tokens (written before the NULL fix) so
-    // disconnected users stop being scanned by the calendar sync crons.
-    await pool.query(`UPDATE settings SET google_tokens = NULL WHERE google_tokens = 'null'`);
-    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
-    // Quiet hours — "HH:MM" local-time window during which non-urgent reminders are held.
-    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_start TEXT`);
-    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_end TEXT`);
-    // No-time reminders: remind_at NULL = a captured item with no schedule yet.
-    await pool.query(`ALTER TABLE reminders ALTER COLUMN remind_at DROP NOT NULL`);
-    // Semantic chat-memory recall — pgvector extension + embedding column + ANN index.
-    // If the extension isn't available on this Postgres instance, this throws and is
-    // caught below; the feature then stays silently disabled (write/read paths already
-    // treat a missing column as "return null / []" — see Task 3/4).
-    await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
-    await pool.query(`ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS embedding vector(512)`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_history_embedding ON chat_history USING hnsw (embedding vector_cosine_ops)`);
-  } catch (e) { console.error('[DB] Migration:', e.message); }
+  // Migrations — best-effort, tolerate missing/already-applied columns. Each
+  // statement is caught independently (via `migrate`) so one failing statement
+  // (e.g. a bad ordering, or an unsupported extension) can't silently abort
+  // every migration after it in the list — a real bug that hit this exact
+  // block earlier in this branch's history (see the google_tokens comment
+  // below). The generic catch-and-continue is intentional here: these are all
+  // "nice to have if possible" schema tweaks, not required for boot.
+  const migrate = async (sql) => {
+    try {
+      await pool.query(sql);
+    } catch (e) {
+      console.error('[DB] Migration failed:', sql.trim().slice(0, 80), '—', e.message);
+    }
+  };
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal'`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS fire_count INTEGER DEFAULT 0`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS shared_with TEXT`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS created_by TEXT`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS google_event_id TEXT`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+  // Column must exist before the purge below can reference it — on a fresh
+  // database (e.g. CI's ephemeral Postgres) these once ran in the opposite
+  // order, so the UPDATE threw "column does not exist" and (before `migrate`
+  // existed) silently aborted every migration after it in this block.
+  await migrate(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
+  // Purge legacy 'null'-string google_tokens (written before the NULL fix) so
+  // disconnected users stop being scanned by the calendar sync crons.
+  await migrate(`UPDATE settings SET google_tokens = NULL WHERE google_tokens = 'null'`);
+  await migrate(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
+  // Quiet hours — "HH:MM" local-time window during which non-urgent reminders are held.
+  await migrate(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_start TEXT`);
+  await migrate(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_end TEXT`);
+  // No-time reminders: remind_at NULL = a captured item with no schedule yet.
+  await migrate(`ALTER TABLE reminders ALTER COLUMN remind_at DROP NOT NULL`);
+  // Semantic chat-memory recall — pgvector extension + embedding column + ANN index.
+  // If the extension isn't available on this Postgres instance, this throws and is
+  // caught independently; the feature then stays silently disabled (write/read paths
+  // already treat a missing column as "return null / []" — see Task 3/4).
+  await migrate(`CREATE EXTENSION IF NOT EXISTS vector`);
+  await migrate(`ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS embedding vector(512)`);
+  await migrate(`CREATE INDEX IF NOT EXISTS idx_chat_history_embedding ON chat_history USING hnsw (embedding vector_cosine_ops)`);
 
   isPostgres = true;
   console.log('[DB] Connected to Postgres');
