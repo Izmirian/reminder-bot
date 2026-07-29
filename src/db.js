@@ -971,7 +971,7 @@ export async function storeEmbedding(id, embedding) {
 // throws) if embeddings are unconfigured/unavailable — callers treat that as
 // "this row just has no embedding," not an error.
 export async function embedAndStoreMessage(id, content) {
-  const embedding = await embedText(content);
+  const embedding = await embedText(content, { blocking: false });
   if (!embedding) return false;
   await storeEmbedding(id, embedding);
   return true;

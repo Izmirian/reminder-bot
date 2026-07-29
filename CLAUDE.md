@@ -121,7 +121,7 @@ Smart model selection: Haiku for simple intents, Sonnet for complex ones. Automa
 - **Fetch timeouts:** All HTTP calls have AbortSignal.timeout (10-30s depending on operation)
 - **Process stability:** uncaughtException + unhandledRejection handlers, graceful SIGTERM/SIGINT shutdown with DB pool close
 - **Auto-cleanup:** Daily at 3am prunes stale reminders (30d), deactivated (90d), completed (6mo), chat history (60d), expenses (1yr)
-- **Haiku fallback:** If Haiku returns malformed JSON, automatically retries with Sonnet once instead of triggering 60s cooldown
+- **Haiku fallback:** If Haiku returns malformed JSON, automatically retries with Sonnet once instead of triggering 10s cooldown
 
 ## Important Patterns
 
