@@ -137,3 +137,47 @@ test('embedAndStoreMessage: end-to-end with a real Voyage embedding', { skip: !h
   const ok = await db.embedAndStoreMessage(id, text);
   assert.equal(ok, true);
 });
+
+// --- Chat-memory: semantic retrieval read path ---
+
+test('getRelevantHistory returns [] when embedding is null (feature inert)', { skip: !hasDb }, async () => {
+  const results = await db.getRelevantHistory(TEST_CHAT, null);
+  assert.deepEqual(results, []);
+});
+
+test('getRelevantHistory: exact-match vector ranks above an orthogonal vector', { skip: !hasDb }, async () => {
+  const chatId = TEST_CHAT + '-similarity';
+  const dims = 512;
+  const vecA = Array(dims).fill(0); vecA[0] = 1;   // unit vector along dim 0
+  const vecB = Array(dims).fill(0); vecB[1] = 1;   // orthogonal to A — cosine similarity 0
+
+  const idA = await db.addChatMessage(chatId, 'user', 'message A — should match');
+  await db.storeEmbedding(idA, vecA);
+  const idB = await db.addChatMessage(chatId, 'user', 'message B — unrelated');
+  await db.storeEmbedding(idB, vecB);
+
+  // Query with A's own vector: distance to A is 0 (similarity 1, well within the
+  // default 0.75 threshold); distance to B is 1 (similarity 0, filtered out).
+  const results = await db.getRelevantHistory(chatId, vecA, { minAgeHours: 0 });
+  assert.equal(results.length, 1);
+  assert.ok(results[0].content.includes('message A'));
+});
+
+test('getRelevantHistory respects minAgeHours (excludes very recent rows by default)', { skip: !hasDb }, async () => {
+  const chatId = TEST_CHAT + '-recency';
+  const vec = Array(512).fill(0); vec[0] = 1;
+  const id = await db.addChatMessage(chatId, 'user', 'just said this a second ago');
+  await db.storeEmbedding(id, vec);
+  // Default minAgeHours (CONFIG.CHAT_RECALL_MIN_AGE_HOURS = 1) excludes a row this fresh.
+  const results = await db.getRelevantHistory(chatId, vec);
+  assert.equal(results.length, 0);
+});
+
+// Pure function — no DB access — but still gated on hasDb because `db` above is only
+// populated by the conditional dynamic import in before(); ungated, this throws
+// "Cannot read properties of undefined" locally instead of skipping cleanly.
+test('similarityToDistance converts min-similarity to a pgvector max-distance', { skip: !hasDb }, () => {
+  assert.equal(db.similarityToDistance(0.75), 0.25);
+  assert.equal(db.similarityToDistance(1), 0);
+  assert.equal(db.similarityToDistance(0), 1);
+});

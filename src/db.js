@@ -966,6 +966,43 @@ export async function embedAndStoreMessage(id, content) {
   return true;
 }
 
+// Pure — pgvector's <=> operator (with vector_cosine_ops) returns cosine
+// DISTANCE (1 - similarity), so a similarity threshold must be inverted
+// before use in a WHERE clause. Exported for direct unit testing.
+export function similarityToDistance(minSimilarity) {
+  return 1 - minSimilarity;
+}
+
+// Semantic search over a chat's older history. Returns [] (never throws) when
+// embeddings are unavailable/unconfigured/non-Postgres — callers treat that as
+// "no relevant context found," identical to a genuine zero-match result.
+export async function getRelevantHistory(chatId, embedding, opts = {}) {
+  if (!isPostgres || !embedding) return [];
+  const {
+    minSimilarity = CONFIG.CHAT_RECALL_MIN_SIMILARITY,
+    limit = CONFIG.CHAT_RECALL_MAX_RESULTS,
+    minAgeHours = CONFIG.CHAT_RECALL_MIN_AGE_HOURS,
+  } = opts;
+  const maxDistance = similarityToDistance(minSimilarity);
+  const vectorLiteral = `[${embedding.join(',')}]`;
+  try {
+    const rows = (await query(
+      `SELECT role, content, created_at FROM chat_history
+       WHERE chat_id = ? AND embedding IS NOT NULL
+         AND created_at > NOW() - INTERVAL '${CONFIG.PURGE_CHAT_HISTORY_DAYS} days'
+         AND created_at < NOW() - INTERVAL '${minAgeHours} hours'
+         AND (embedding <=> ?::vector) <= ?
+       ORDER BY embedding <=> ?::vector
+       LIMIT ?`,
+      [chatId, vectorLiteral, maxDistance, vectorLiteral, limit]
+    )).rows;
+    return rows;
+  } catch (e) {
+    console.error('[DB] getRelevantHistory failed:', e.message);
+    return [];
+  }
+}
+
 export async function getChatHistory(chatId, limit = 50) {
   // Get last N messages (limit = 50 = 25 exchanges)
   const rows = (await query(
