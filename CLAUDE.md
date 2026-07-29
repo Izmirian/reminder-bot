@@ -53,7 +53,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | `memory` | Conversation facts the bot remembers |
 | `expenses` | Spending tracker with categories |
 | `documents` | Stored files/PDFs with binary data |
-| `chat_history` | Persisted conversation history (200 msgs per chat) |
+| `chat_history` | Persisted conversation history, 60-day retention, `pgvector` embeddings for semantic recall |
 | `projects` | Task grouping by project |
 | `pins` | Pinned important messages |
 | `followups` | People/things you're waiting on with due dates |
@@ -85,11 +85,11 @@ Smart model selection: Haiku for simple intents, Sonnet for complex ones. Automa
 ## Conversation History
 
 - Stored in Postgres `chat_history` table — survives deploys
-- 200 messages (100 exchanges) retained per chat, auto-pruned
+- Retained 60 days per chat (safety cap of 5000 msgs/chat, rarely hit); auto-pruned by cleanup cron
 - Adaptive history sent to AI: 0 for simple commands, 10 for normal, 20 for context-dependent
 - Each message capped at 2000 chars
 - Richer context stored for non-chat intents (reminder text, expense amounts, etc.)
-- Chat history purged after 30 days by cleanup cron
+- **Semantic recall:** each message is embedded via Voyage AI (`voyage-3-lite`, 512-dim, `src/embeddings.js`) and stored in a `pgvector` column. On every non-trivial message, `getRelevantHistory()` (`src/db.js`) semantically searches the chat's older history (>1h old, ≥0.75 cosine similarity) and injects the top matches into the AI prompt via `formatRetrievedContext()` — implicit, no command needed (e.g. "what was that thing about the factory guy?" just works). Fully inert if `VOYAGE_API_KEY` is unset or Voyage is unreachable — never blocks or breaks the chat flow. Message text is sent to Voyage for embedding, in addition to Anthropic.
 
 ## Cron Jobs (both platforms)
 
@@ -153,6 +153,7 @@ TIMEZONE=Asia/Amman
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 HEALTHCHECK_URL (optional — external dead-man's-switch ping target, e.g. healthchecks.io)
+VOYAGE_API_KEY (optional — enables chat-memory semantic recall; feature is fully inert if unset)
 ```
 
 ## Reliability & CI
