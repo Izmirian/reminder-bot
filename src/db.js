@@ -4,6 +4,8 @@
  * Since all callers are in async contexts, we export async functions that work with both.
  */
 import pg from 'pg';
+import { CONFIG } from './config.js';
+import { embedText } from './embeddings.js';
 
 const { Pool } = pg;
 
@@ -277,26 +279,48 @@ async function initPostgres() {
   // Add currency to expenses
   try { await pool.query(`ALTER TABLE expenses ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'JOD'`); } catch (e) { console.error('[DB] Migration:', e.message); }
 
-  // Migrations
-  try {
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal'`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS fire_count INTEGER DEFAULT 0`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS shared_with TEXT`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS created_by TEXT`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS google_event_id TEXT`);
-    await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
-    // Purge legacy 'null'-string google_tokens (written before the NULL fix) so
-    // disconnected users stop being scanned by the calendar sync crons.
-    await pool.query(`UPDATE settings SET google_tokens = NULL WHERE google_tokens = 'null'`);
-    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
-    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
-    // Quiet hours — "HH:MM" local-time window during which non-urgent reminders are held.
-    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_start TEXT`);
-    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_end TEXT`);
-    // No-time reminders: remind_at NULL = a captured item with no schedule yet.
-    await pool.query(`ALTER TABLE reminders ALTER COLUMN remind_at DROP NOT NULL`);
-  } catch (e) { console.error('[DB] Migration:', e.message); }
+  // Migrations — best-effort, tolerate missing/already-applied columns. Each
+  // statement is caught independently (via `migrate`) so one failing statement
+  // (e.g. a bad ordering, or an unsupported extension) can't silently abort
+  // every migration after it in the list — a real bug that hit this exact
+  // block earlier in this branch's history (see the google_tokens comment
+  // below). The generic catch-and-continue is intentional here: these are all
+  // "nice to have if possible" schema tweaks, not required for boot.
+  const migrate = async (sql) => {
+    try {
+      await pool.query(sql);
+    } catch (e) {
+      console.error('[DB] Migration failed:', sql.trim().slice(0, 80), '—', e.message);
+    }
+  };
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS media_data BYTEA`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS priority TEXT DEFAULT 'normal'`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS fire_count INTEGER DEFAULT 0`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS shared_with TEXT`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS created_by TEXT`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS google_event_id TEXT`);
+  await migrate(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+  // Column must exist before the purge below can reference it — on a fresh
+  // database (e.g. CI's ephemeral Postgres) these once ran in the opposite
+  // order, so the UPDATE threw "column does not exist" and (before `migrate`
+  // existed) silently aborted every migration after it in this block.
+  await migrate(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
+  // Purge legacy 'null'-string google_tokens (written before the NULL fix) so
+  // disconnected users stop being scanned by the calendar sync crons.
+  await migrate(`UPDATE settings SET google_tokens = NULL WHERE google_tokens = 'null'`);
+  await migrate(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
+  // Quiet hours — "HH:MM" local-time window during which non-urgent reminders are held.
+  await migrate(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_start TEXT`);
+  await migrate(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_end TEXT`);
+  // No-time reminders: remind_at NULL = a captured item with no schedule yet.
+  await migrate(`ALTER TABLE reminders ALTER COLUMN remind_at DROP NOT NULL`);
+  // Semantic chat-memory recall — pgvector extension + embedding column + ANN index.
+  // If the extension isn't available on this Postgres instance, this throws and is
+  // caught independently; the feature then stays silently disabled (write/read paths
+  // already treat a missing column as "return null / []" — see Task 3/4).
+  await migrate(`CREATE EXTENSION IF NOT EXISTS vector`);
+  await migrate(`ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS embedding vector(512)`);
+  await migrate(`CREATE INDEX IF NOT EXISTS idx_chat_history_embedding ON chat_history USING hnsw (embedding vector_cosine_ops)`);
 
   isPostgres = true;
   console.log('[DB] Connected to Postgres');
@@ -898,10 +922,11 @@ export async function purgeOldCompletedReminders() {
   return result.changes || 0;
 }
 
-// Delete chat history older than 30 days
+// Delete chat history older than PURGE_CHAT_HISTORY_DAYS (60) — the real retention
+// mechanism for chat memory; addChatMessage's own prune is just a safety cap.
 export async function purgeOldChatHistory() {
   const result = await run(
-    "DELETE FROM chat_history WHERE created_at < NOW() - INTERVAL '30 days'"
+    `DELETE FROM chat_history WHERE created_at < NOW() - INTERVAL '${CONFIG.PURGE_CHAT_HISTORY_DAYS} days'`
   );
   return result.changes || 0;
 }
@@ -917,13 +942,76 @@ export async function purgeOldExpenses() {
 // --- Chat History ---
 
 export async function addChatMessage(chatId, role, content) {
-  await insert('INSERT INTO chat_history (chat_id, role, content) VALUES (?, ?, ?)',
-    [chatId, role, content.substring(0, 2000)]); // Cap at 2000 chars per message
-  // Prune old messages — keep last 200 per chat (100 exchanges)
+  const trimmed = content.substring(0, 2000); // Cap at 2000 chars per message
+  const id = await insert('INSERT INTO chat_history (chat_id, role, content) VALUES (?, ?, ?)',
+    [chatId, role, trimmed]);
+  // Safety-cap prune — the real retention mechanism is the 60-day purge cron
+  // (purgeOldChatHistory). This just bounds worst-case table growth.
   await run(
-    `DELETE FROM chat_history WHERE chat_id = ? AND id NOT IN (SELECT id FROM chat_history WHERE chat_id = ? ORDER BY created_at DESC LIMIT 200)`,
+    `DELETE FROM chat_history WHERE chat_id = ? AND id NOT IN (SELECT id FROM chat_history WHERE chat_id = ? ORDER BY created_at DESC LIMIT ${CONFIG.CHAT_HISTORY_SAFETY_CAP})`,
     [chatId, chatId]
   );
+  // Best-effort embed — fire-and-forget so a slow/failed Voyage call never
+  // blocks or fails the surrounding chat flow.
+  if (isPostgres && id) {
+    embedAndStoreMessage(id, trimmed).catch((e) => console.error('[DB] Embed-write failed:', e.message));
+  }
+  return id;
+}
+
+// Write an already-computed embedding to a chat_history row. Split out from
+// embedAndStoreMessage so schema/cast behavior is testable with a synthetic
+// vector, independent of a live Voyage call.
+export async function storeEmbedding(id, embedding) {
+  const vectorLiteral = `[${embedding.join(',')}]`;
+  await run('UPDATE chat_history SET embedding = ?::vector WHERE id = ?', [vectorLiteral, id]);
+}
+
+// Embed a message's content via Voyage and store it. Returns false (never
+// throws) if embeddings are unconfigured/unavailable — callers treat that as
+// "this row just has no embedding," not an error.
+export async function embedAndStoreMessage(id, content) {
+  const embedding = await embedText(content, { blocking: false });
+  if (!embedding) return false;
+  await storeEmbedding(id, embedding);
+  return true;
+}
+
+// Pure — pgvector's <=> operator (with vector_cosine_ops) returns cosine
+// DISTANCE (1 - similarity), so a similarity threshold must be inverted
+// before use in a WHERE clause. Exported for direct unit testing.
+export function similarityToDistance(minSimilarity) {
+  return 1 - minSimilarity;
+}
+
+// Semantic search over a chat's older history. Returns [] (never throws) when
+// embeddings are unavailable/unconfigured/non-Postgres — callers treat that as
+// "no relevant context found," identical to a genuine zero-match result.
+export async function getRelevantHistory(chatId, embedding, opts = {}) {
+  if (!isPostgres || !embedding) return [];
+  const {
+    minSimilarity = CONFIG.CHAT_RECALL_MIN_SIMILARITY,
+    limit = CONFIG.CHAT_RECALL_MAX_RESULTS,
+    minAgeHours = CONFIG.CHAT_RECALL_MIN_AGE_HOURS,
+  } = opts;
+  const maxDistance = similarityToDistance(minSimilarity);
+  const vectorLiteral = `[${embedding.join(',')}]`;
+  try {
+    const rows = (await query(
+      `SELECT role, content, created_at FROM chat_history
+       WHERE chat_id = ? AND embedding IS NOT NULL
+         AND created_at > NOW() - INTERVAL '${CONFIG.PURGE_CHAT_HISTORY_DAYS} days'
+         AND created_at < NOW() - INTERVAL '1 hour' * ?
+         AND (embedding <=> ?::vector) <= ?
+       ORDER BY embedding <=> ?::vector
+       LIMIT ?`,
+      [chatId, minAgeHours, vectorLiteral, maxDistance, vectorLiteral, limit]
+    )).rows;
+    return rows;
+  } catch (e) {
+    console.error('[DB] getRelevantHistory failed:', e.message);
+    return [];
+  }
 }
 
 export async function getChatHistory(chatId, limit = 50) {
