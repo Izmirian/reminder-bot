@@ -313,7 +313,8 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 /**
  * Classify user intent with context about their active reminders.
  */
-import { addChatMessage, getChatHistory as dbGetChatHistory } from './db.js';
+import { addChatMessage, getChatHistory as dbGetChatHistory, getRelevantHistory } from './db.js';
+import { embedText } from './embeddings.js';
 
 export async function addToHistory(chatId, role, content) {
   try { await addChatMessage(chatId, role, content); } catch (e) { console.error('[History]', e.message); }
@@ -354,6 +355,21 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
     const historyLimit = isSimpleCommand ? 0 : needsFullContext ? 20 : 10;
     const history = (chatId && historyLimit > 0) ? await dbGetChatHistory(chatId, historyLimit) : [];
 
+    // Semantic recall — surface older, relevant messages beyond the recent
+    // window. Skipped for simple commands (same gate as history) since they
+    // never need context. Failures here must NOT trip the Anthropic-specific
+    // cooldown below (outer catch) — hence the separate inner try/catch.
+    let retrievedContext = '';
+    if (chatId && !isSimpleCommand) {
+      try {
+        const queryEmbedding = await embedText(userMessage);
+        if (queryEmbedding) {
+          const snippets = await getRelevantHistory(chatId, queryEmbedding);
+          retrievedContext = formatRetrievedContext(snippets);
+        }
+      } catch (e) { console.error('[AI] Retrieval failed:', e.message); }
+    }
+
     const messages = [
       ...history,
       {
@@ -371,7 +387,7 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
       model,
       max_tokens: maxTokens,
       ...(needsSonnet ? {} : { temperature: 0.3 }),
-      system: buildPrompt(activeReminders),
+      system: buildPrompt(activeReminders, retrievedContext),
       messages,
     });
 
@@ -386,7 +402,7 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
       // If Haiku returned bad JSON, retry with Sonnet once
       if (model !== 'claude-sonnet-5') {
         console.warn(`[AI] Haiku JSON parse failed, retrying with Sonnet`);
-        const retryRes = await api.messages.create({ model: 'claude-sonnet-5', max_tokens: 800, system: buildPrompt(activeReminders), messages });
+        const retryRes = await api.messages.create({ model: 'claude-sonnet-5', max_tokens: 800, system: buildPrompt(activeReminders, retrievedContext), messages });
         let retryText = retryRes.content[0]?.text;
         if (retryText) {
           retryText = retryText.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
