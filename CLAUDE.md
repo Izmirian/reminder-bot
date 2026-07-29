@@ -120,7 +120,7 @@ Smart model selection: Haiku for simple intents, Sonnet for complex ones. Automa
 - **File size limits:** 20MB cap on media downloads before buffering
 - **Fetch timeouts:** All HTTP calls have AbortSignal.timeout (10-30s depending on operation)
 - **Process stability:** uncaughtException + unhandledRejection handlers, graceful SIGTERM/SIGINT shutdown with DB pool close
-- **Auto-cleanup:** Daily at 3am prunes stale reminders (30d), deactivated (90d), completed (6mo), chat history (30d), expenses (1yr)
+- **Auto-cleanup:** Daily at 3am prunes stale reminders (30d), deactivated (90d), completed (6mo), chat history (60d), expenses (1yr)
 - **Haiku fallback:** If Haiku returns malformed JSON, automatically retries with Sonnet once instead of triggering 60s cooldown
 
 ## Important Patterns
@@ -161,7 +161,7 @@ VOYAGE_API_KEY (optional — enables chat-memory semantic recall; feature is ful
 - **External heartbeat:** `src/monitor.js` `startHeartbeat()` pings `HEALTHCHECK_URL` every 2 min. If the process crashes/loops, pings stop and the external service (healthchecks.io) alerts the owner. No-op if unset.
 - **Internal self-check:** `startSelfCheck()` probes the DB every 5 min; after 2 consecutive failures it texts the owner (`WHATSAPP_TO_NUMBER`) via WhatsApp, with a 30-min cooldown, and sends a recovery note when the DB returns.
 - **Tests:** `npm test` runs `node --test test/*.test.js`. Pure-logic tests (`test/handlers.test.js`) always run; DB smoke tests (`test/db.test.js`) only run when `DATABASE_URL` is set.
-- **CI:** `.github/workflows/ci.yml` runs on push/PR against a **postgres:18** service container — catches PG18 type-coercion bugs that local SQLite never sees.
+- **CI:** `.github/workflows/ci.yml` runs on push/PR against a **`pgvector/pgvector:pg18`** service container (not the plain `postgres:18` image) — needed because chat-memory semantic recall requires the `pgvector` extension, which the official Postgres image doesn't bundle. Also catches PG18 type-coercion bugs that local SQLite never sees.
 
 ## User Preferences
 
