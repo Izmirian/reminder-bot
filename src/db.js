@@ -990,11 +990,11 @@ export async function getRelevantHistory(chatId, embedding, opts = {}) {
       `SELECT role, content, created_at FROM chat_history
        WHERE chat_id = ? AND embedding IS NOT NULL
          AND created_at > NOW() - INTERVAL '${CONFIG.PURGE_CHAT_HISTORY_DAYS} days'
-         AND created_at < NOW() - INTERVAL '${minAgeHours} hours'
+         AND created_at < NOW() - INTERVAL '1 hour' * ?
          AND (embedding <=> ?::vector) <= ?
        ORDER BY embedding <=> ?::vector
        LIMIT ?`,
-      [chatId, vectorLiteral, maxDistance, vectorLiteral, limit]
+      [chatId, minAgeHours, vectorLiteral, maxDistance, vectorLiteral, limit]
     )).rows;
     return rows;
   } catch (e) {
