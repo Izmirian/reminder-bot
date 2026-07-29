@@ -146,7 +146,7 @@ test('getRelevantHistory returns [] when embedding is null (feature inert)', { s
 });
 
 test('getRelevantHistory: exact-match vector ranks above an orthogonal vector', { skip: !hasDb }, async () => {
-  const chatId = TEST_CHAT + '-similarity';
+  const chatId = TEST_CHAT + '-similarity-' + Date.now();
   const dims = 512;
   const vecA = Array(dims).fill(0); vecA[0] = 1;   // unit vector along dim 0
   const vecB = Array(dims).fill(0); vecB[1] = 1;   // orthogonal to A — cosine similarity 0
@@ -164,7 +164,7 @@ test('getRelevantHistory: exact-match vector ranks above an orthogonal vector', 
 });
 
 test('getRelevantHistory respects minAgeHours (excludes very recent rows by default)', { skip: !hasDb }, async () => {
-  const chatId = TEST_CHAT + '-recency';
+  const chatId = TEST_CHAT + '-recency-' + Date.now();
   const vec = Array(512).fill(0); vec[0] = 1;
   const id = await db.addChatMessage(chatId, 'user', 'just said this a second ago');
   await db.storeEmbedding(id, vec);
