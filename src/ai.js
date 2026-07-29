@@ -40,7 +40,20 @@ async function ensureClient() {
   return initPromise;
 }
 
-function buildPrompt(activeReminders) {
+// Pure — formats retrieved older messages into a labeled system-prompt
+// section, kept visually distinct from the live conversational history so
+// the model treats these as background context, not recent turns.
+export function formatRetrievedContext(snippets) {
+  if (!snippets || snippets.length === 0) return '';
+  let block = '\n\nRelevant past context (from earlier conversation — may or may not be related; use only if it helps answer the current message):\n';
+  for (const s of snippets) {
+    const date = new Date(s.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    block += `- [${date}] ${s.role}: ${s.content}\n`;
+  }
+  return block;
+}
+
+function buildPrompt(activeReminders, retrievedContext = '') {
   let remindersContext = '';
   if (activeReminders && activeReminders.length > 0) {
     remindersContext = '\n\nThe user currently has these active reminders:\n';
@@ -292,7 +305,7 @@ NO TIME GIVEN (capture as no-time item, remindAt: null — do NOT ask for a time
 - "tomorrow" alone, "Monday" alone, "next week", "this weekend" → remindAt: null (no time, so it's a no-time item)
 
 Category: health (medicine, doctor, gym), work (meeting, email, deadline), personal (groceries, buy, clean)
-${remindersContext}
+${remindersContext}${retrievedContext}
 
 Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 }
