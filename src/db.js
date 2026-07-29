@@ -288,10 +288,14 @@ async function initPostgres() {
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS created_by TEXT`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS google_event_id TEXT`);
     await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+    // Column must exist before the purge below can reference it — on a fresh
+    // database (e.g. CI's ephemeral Postgres) these ran in the opposite order,
+    // so the UPDATE threw "column does not exist" and silently aborted every
+    // migration after it in this block (caught below, never surfaced).
+    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
     // Purge legacy 'null'-string google_tokens (written before the NULL fix) so
     // disconnected users stop being scanned by the calendar sync crons.
     await pool.query(`UPDATE settings SET google_tokens = NULL WHERE google_tokens = 'null'`);
-    await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_tokens TEXT`);
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS google_calendar_id TEXT DEFAULT 'primary'`);
     // Quiet hours — "HH:MM" local-time window during which non-urgent reminders are held.
     await pool.query(`ALTER TABLE settings ADD COLUMN IF NOT EXISTS quiet_start TEXT`);
