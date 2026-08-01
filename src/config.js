@@ -9,9 +9,12 @@ export const CONFIG = {
   AI_RATE_LIMIT_TOTAL: parseInt(process.env.AI_RATE_LIMIT_TOTAL || '200'),
 
   // Chat history
-  CHAT_HISTORY_DB_LIMIT: 200,        // Max messages stored in DB per chat
+  CHAT_HISTORY_SAFETY_CAP: 5000,     // Hard cap per chat — real retention is the 60-day purge cron (PURGE_CHAT_HISTORY_DAYS below)
   CHAT_HISTORY_AI_CONTEXT: 20,       // Max messages sent to AI (default, adaptive overrides)
   CHAT_MESSAGE_MAX_CHARS: 2000,      // Max chars per stored message
+  CHAT_RECALL_MIN_SIMILARITY: 0.75,  // Min cosine similarity for a semantic-recall match
+  CHAT_RECALL_MAX_RESULTS: 5,        // Max retrieved snippets injected into the AI prompt per turn
+  CHAT_RECALL_MIN_AGE_HOURS: 1,      // Exclude very-recent messages (already covered by the live history window)
 
   // Timeouts (ms)
   FETCH_TIMEOUT: 15000,              // Default fetch timeout
@@ -37,7 +40,7 @@ export const CONFIG = {
   STALE_REMINDER_DAYS: 30,           // Auto-deactivate one-off reminders after N days
   PURGE_DEACTIVATED_DAYS: 90,        // Purge deactivated reminders after N days
   PURGE_COMPLETED_DAYS: 180,         // Purge completed reminders after N days
-  PURGE_CHAT_HISTORY_DAYS: 30,       // Purge chat history after N days
+  PURGE_CHAT_HISTORY_DAYS: 60,       // Purge chat history after N days (was 30 — extended so semantic recall has real range)
   PURGE_EXPENSES_DAYS: 365,          // Purge expenses after N days
 
   // Idle check-in

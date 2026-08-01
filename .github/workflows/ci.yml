@@ -13,9 +13,12 @@ jobs:
     # Match production: Postgres 18 (Railway uses postgres-ssl:18).
     # This is what catches PG18-specific type-coercion bugs that the
     # local SQLite path never exercises.
+    # Uses the pgvector/pgvector image (not the plain postgres image) because
+    # chat-memory semantic recall requires the pgvector extension, which the
+    # official postgres image does not bundle.
     services:
       postgres:
-        image: postgres:18
+        image: pgvector/pgvector:pg18
         env:
           POSTGRES_USER: bot
           POSTGRES_PASSWORD: bot

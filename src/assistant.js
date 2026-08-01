@@ -469,7 +469,7 @@ export async function handleSummarizeIntent(url, chatId) {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic();
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5',
       max_tokens: 300,
       messages: [{ role: 'user', content: `Summarize this in 3-5 bullet points, concise:\n\n${text}` }],
     });
@@ -679,7 +679,7 @@ export async function handleResearchIntent(aiResult, chatId) {
       : `Based on the information below, provide a comprehensive answer about: ${searchQuery}. Include key findings.${siteContent ? ' Prioritize data from the actual website content over search results.' : ''}`;
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5',
       max_tokens: 800,
       messages: [{ role: 'user', content: `${prompt}${siteSection}\n\nSearch results:\n${html}` }],
     });

@@ -182,5 +182,44 @@ export function createWebhookServer() {
     res.json({ status: 'ok', service: 'WhatsApp Reminder Bot', uptime: Math.floor(process.uptime()) });
   });
 
+  // Structured health for the Thoughts status page (and any monitor). Payload is
+  // booleans/latency/timestamps only — no secrets, message content, or URLs.
+  app.get('/health', async (req, res) => {
+    const checks = {};
+    const t0 = Date.now();
+    try {
+      const { pingDb } = await import('../db.js');
+      await pingDb();
+      checks.db = { ok: true, latencyMs: Date.now() - t0 };
+    } catch (e) {
+      checks.db = { ok: false, error: e.message };
+    }
+
+    try {
+      const { thoughtsEnabled, getForwardStats } = await import('../thoughts-forward.js');
+      const configured = thoughtsEnabled();
+      let reachable = null;
+      if (configured) {
+        try {
+          const r = await fetch(`${process.env.THOUGHTS_INGEST_URL.replace(/\/$/, '')}/health`,
+            { signal: AbortSignal.timeout(5000) });
+          reachable = r.ok;
+        } catch { reachable = false; }
+      }
+      const stats = getForwardStats();
+      checks.thoughts = {
+        configured, reachable,
+        lastForwardOk: stats.lastOkAt,
+        lastForwardError: stats.lastErrorAt,
+        lastForwardErrorCode: stats.lastErrorCode,
+      };
+    } catch (e) {
+      checks.thoughts = { configured: false, error: e.message };
+    }
+
+    const degraded = !checks.db.ok || checks.thoughts.reachable === false;
+    res.json({ status: degraded ? 'degraded' : 'ok', uptime: Math.floor(process.uptime()), checks });
+  });
+
   return app;
 }

@@ -67,3 +67,53 @@ test('thoughtReply is unmistakable and reflects pin + graph outcome', async () =
   // total failure surfaces a resend prompt, never a silent success
   assert.match(thoughtReply({ pinned: false, graph: null, graphConfigured: false }), /Couldn't save/);
 });
+
+test('getForwardStats starts null and records outcomes via forwardToThoughts', async () => {
+  // Point at a dead local port -> terminal network failure -> error recorded.
+  const m = await freshModule({ THOUGHTS_INGEST_URL: 'http://127.0.0.1:1', THOUGHTS_INGEST_SECRET: 's' });
+  const before = m.getForwardStats();
+  assert.equal(before.lastOkAt, null);
+  assert.equal(before.lastErrorAt, null);
+  await m.forwardToThoughts({ chatId: 'x', text: 'hi' }, 1); // 1 attempt, no retry delay
+  const after = m.getForwardStats();
+  assert.equal(after.lastOkAt, null);
+  assert.ok(after.lastErrorAt, 'error timestamp recorded');
+  assert.equal(after.lastErrorCode, 0, '0 = network failure');
+});
+
+test('GET /health reports db + thoughts checks without leaking secrets', async () => {
+  // Boot the real webhook server in a child process (importing it in-process
+  // drags in scheduler timers that would keep the test runner alive forever).
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `
+    const { createWebhookServer } = await import(new URL('../src/whatsapp/webhook.js', 'file://' + ${JSON.stringify(import.meta.url.replace('file://', ''))}).href);
+    const server = createWebhookServer().listen(0, () => console.log('PORT=' + server.address().port));
+  `], { cwd: new URL('..', import.meta.url).pathname, env: { ...process.env, THOUGHTS_INGEST_URL: '', THOUGHTS_INGEST_SECRET: '', DATABASE_URL: '' } });
+
+  try {
+    const port = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('server boot timeout')), 20000);
+      let buf = '';
+      child.stdout.on('data', (d) => {
+        buf += d.toString();
+        const m = buf.match(/PORT=(\d+)/);
+        if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+      });
+      child.on('exit', () => reject(new Error('server exited early')));
+    });
+
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.ok(['ok', 'degraded'].includes(body.status));
+    assert.equal(typeof body.uptime, 'number');
+    assert.ok('ok' in body.checks.db, 'db check present');
+    assert.equal(body.checks.thoughts.configured, false, 'unconfigured in test env');
+    assert.ok(!/secret|token|password/i.test(JSON.stringify(body)), 'no secret-ish keys in payload');
+    // legacy root route unchanged
+    const legacy = await (await fetch(`http://127.0.0.1:${port}/`)).json();
+    assert.equal(legacy.service, 'WhatsApp Reminder Bot');
+  } finally {
+    child.kill('SIGKILL');
+  }
+});

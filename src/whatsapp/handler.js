@@ -32,7 +32,7 @@ import {
 } from './scheduler.js';
 import { detectRecurringPattern } from '../patterns.js';
 import { getConversationalResponse } from '../conversation.js';
-import { forwardToThoughts, thoughtsEnabled, chatAllowed, extractIdeaPrefix, thoughtReply } from '../thoughts-forward.js';
+import { forwardToThoughts, thoughtsEnabled, chatAllowed, extractIdeaPrefix, thoughtReply, askThoughts, formatAskReply } from '../thoughts-forward.js';
 import { addPin, logAction } from '../db.js';
 import {
   handleListIntent, handleContactIntent, handleJournalIntent,
@@ -629,6 +629,10 @@ async function _handleTextMessage(from, text, quotedMsgId = null) {
     if (aiResult.intent === 'memory') return sendTextMessage(from, await handleMemoryIntent(from, aiResult));
     if (aiResult.intent === 'idea' && chatAllowed(from)) {
       return sendTextMessage(from, await captureThought(from, aiResult.text || text.trim(), { pinSource: 'idea' }));
+    }
+    if (aiResult.intent === 'recall' && thoughtsEnabled() && chatAllowed(from)) {
+      const result = await askThoughts(from, aiResult.question || text.trim());
+      return sendTextMessage(from, formatAskReply(result, aiResult.question));
     }
     if (aiResult.intent === 'expense') return sendTextMessage(from, await handleExpenseIntent(from, aiResult));
     if (aiResult.intent === 'timer') return sendTextMessage(from, handleTimerIntent(from, aiResult, (msg) => sendTextMessage(from, msg)));

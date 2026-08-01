@@ -195,3 +195,23 @@ test('wantsListAfterAction does NOT match plain actions or incidental "list" tex
     assert.equal(wantsListAfterAction(phrase), false, `should not match: "${phrase}"`);
   }
 });
+
+import { formatRetrievedContext } from '../src/ai.js';
+
+test('formatRetrievedContext returns empty string for no snippets', () => {
+  assert.equal(formatRetrievedContext([]), '');
+  assert.equal(formatRetrievedContext(null), '');
+  assert.equal(formatRetrievedContext(undefined), '');
+});
+
+test('formatRetrievedContext renders dated, role-labeled snippets', () => {
+  const snippets = [
+    { role: 'user', content: 'my wifi password is hunter2', created_at: '2026-05-01T10:00:00.000Z' },
+    { role: 'assistant', content: 'Got it, saved.', created_at: '2026-05-01T10:00:05.000Z' },
+  ];
+  const block = formatRetrievedContext(snippets);
+  assert.ok(block.includes('my wifi password is hunter2'));
+  assert.ok(block.includes('user:'));
+  assert.ok(block.includes('assistant:'));
+  assert.ok(block.includes('Relevant past context'));
+});

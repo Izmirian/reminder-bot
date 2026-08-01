@@ -40,7 +40,20 @@ async function ensureClient() {
   return initPromise;
 }
 
-function buildPrompt(activeReminders) {
+// Pure — formats retrieved older messages into a labeled system-prompt
+// section, kept visually distinct from the live conversational history so
+// the model treats these as background context, not recent turns.
+export function formatRetrievedContext(snippets) {
+  if (!snippets || snippets.length === 0) return '';
+  let block = '\n\nRelevant past context (from earlier conversation — may or may not be related; use only if it helps answer the current message):\n';
+  for (const s of snippets) {
+    const date = new Date(s.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    block += `- [${date}] ${s.role}: ${s.content}\n`;
+  }
+  return block;
+}
+
+function buildPrompt(activeReminders, retrievedContext = '') {
   let remindersContext = '';
   if (activeReminders && activeReminders.length > 0) {
     remindersContext = '\n\nThe user currently has these active reminders:\n';
@@ -256,6 +269,14 @@ Classify the message into one of these intents and return a JSON object:
    - "note: the cheap flights are usually Tuesdays" → text="the cheap flights are usually Tuesdays"
    - Prefer a more specific intent when one clearly applies: a daily diary entry = journal; spending = expense.
 
+21. **"recall"** — The user is asking a question about their OWN past ideas/notes/thoughts (the idea graph), wanting them found and summarized.
+   Return: { "intent": "recall", "question": "the question, cleaned up" }
+   - "what were my ideas about giveaways?" → question="what were my ideas about giveaways"
+   - "have I thought about inventory sorting before?" → question="have I thought about inventory sorting before"
+   - "what do my notes say about the diamond app?" → question="what do my notes say about the diamond app"
+   - "search my ideas for marketing" → question="marketing"
+   - Distinguish carefully: "what car do I have?" (a stored personal fact) = memory recall; "find my dentist reminder" = search (reminders); questions about their captured IDEAS/NOTES/THOUGHTS = recall.
+
 ⚠️ CRITICAL — reminders must never be missed, so the reminder/idea boundary is hard:
    - If the message asks to be reminded, or describes a task/action to do, an appointment, a deadline, or contains ANY time/date/"in X minutes/hours/days" → it is a **reminder**, NEVER an idea or pin. ("remind me to call the bank tomorrow", "dentist Thursday 3pm", "pay rent on the 1st", "in 2 hours water the plants").
    - An idea/note/pin has NO time and NO action-to-do — it is a thought to keep ("idea: ...", "note: ...", "pin: ...", a standalone observation).
@@ -284,7 +305,7 @@ NO TIME GIVEN (capture as no-time item, remindAt: null — do NOT ask for a time
 - "tomorrow" alone, "Monday" alone, "next week", "this weekend" → remindAt: null (no time, so it's a no-time item)
 
 Category: health (medicine, doctor, gym), work (meeting, email, deadline), personal (groceries, buy, clean)
-${remindersContext}
+${remindersContext}${retrievedContext}
 
 Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 }
@@ -292,7 +313,8 @@ Return ONLY valid JSON. No markdown, no code fences, no explanation.`;
 /**
  * Classify user intent with context about their active reminders.
  */
-import { addChatMessage, getChatHistory as dbGetChatHistory } from './db.js';
+import { addChatMessage, getChatHistory as dbGetChatHistory, getRelevantHistory } from './db.js';
+import { embedText } from './embeddings.js';
 
 export async function addToHistory(chatId, role, content) {
   try { await addChatMessage(chatId, role, content); } catch (e) { console.error('[History]', e.message); }
@@ -333,6 +355,21 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
     const historyLimit = isSimpleCommand ? 0 : needsFullContext ? 20 : 10;
     const history = (chatId && historyLimit > 0) ? await dbGetChatHistory(chatId, historyLimit) : [];
 
+    // Semantic recall — surface older, relevant messages beyond the recent
+    // window. Skipped for simple commands (same gate as history) since they
+    // never need context. Failures here must NOT trip the Anthropic-specific
+    // cooldown below (outer catch) — hence the separate inner try/catch.
+    let retrievedContext = '';
+    if (chatId && !isSimpleCommand) {
+      try {
+        const queryEmbedding = await embedText(userMessage);
+        if (queryEmbedding) {
+          const snippets = await getRelevantHistory(chatId, queryEmbedding);
+          retrievedContext = formatRetrievedContext(snippets);
+        }
+      } catch (e) { console.error('[AI] Retrieval failed:', e.message); }
+    }
+
     const messages = [
       ...history,
       {
@@ -343,14 +380,14 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
 
     // Use Haiku for simple intents (cheaper), Sonnet for complex ones
     const needsSonnet = needsFullContext || /summariz|research|compar|analyz|translate|explain|draft.*email|switch.*(?:and|\+)|\b(?:move|change|reschedule|shift|push).*(?:and|\+)/i.test(lowerMsg);
-    const model = needsSonnet ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20251001';
+    const model = needsSonnet ? 'claude-sonnet-5' : 'claude-haiku-4-5-20251001';
     const maxTokens = needsSonnet ? 800 : 400;
 
     const response = await api.messages.create({
       model,
       max_tokens: maxTokens,
-      temperature: 0.3,
-      system: buildPrompt(activeReminders),
+      ...(needsSonnet ? {} : { temperature: 0.3 }),
+      system: buildPrompt(activeReminders, retrievedContext),
       messages,
     });
 
@@ -363,9 +400,9 @@ export async function classifyIntent(userMessage, timezone, currentTime, activeR
       result = JSON.parse(text);
     } catch (parseErr) {
       // If Haiku returned bad JSON, retry with Sonnet once
-      if (model !== 'claude-sonnet-4-20250514') {
+      if (model !== 'claude-sonnet-5') {
         console.warn(`[AI] Haiku JSON parse failed, retrying with Sonnet`);
-        const retryRes = await api.messages.create({ model: 'claude-sonnet-4-20250514', max_tokens: 800, temperature: 0.3, system: buildPrompt(activeReminders), messages });
+        const retryRes = await api.messages.create({ model: 'claude-sonnet-5', max_tokens: 800, system: buildPrompt(activeReminders, retrievedContext), messages });
         let retryText = retryRes.content[0]?.text;
         if (retryText) {
           retryText = retryText.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();

@@ -25,7 +25,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | `src/scheduler.js` | Telegram reminder scheduler, daily digest, birthday checks, cleanup crons, idle check-in, EOD recap, week planning, follow-up alerts |
 | `src/index.js` | Telegram bot — message handler, callback queries, all 18 intent routing, photo/document/forward handling |
 | `src/whatsapp/handler.js` | WhatsApp message handler — mirrors Telegram with all 18 intent routing, photo/document analysis |
-| `src/whatsapp/webhook.js` | Express server — Meta webhook with HMAC signature verification, message deduplication, Google OAuth routes, health check |
+| `src/whatsapp/webhook.js` | Express server — Meta webhook with HMAC signature verification, message deduplication, Google OAuth routes, `/` liveness + `GET /health` (db ping + Thoughts reachability + forward stats, consumed by the Thoughts status page) |
 | `src/whatsapp/scheduler.js` | WhatsApp reminder scheduler, digest, birthday checks, idle check-in, EOD recap, week planning, follow-up alerts |
 | `src/whatsapp/api.js` | WhatsApp Cloud API client — fetchWithRetry (exponential backoff), send text/buttons/images, mark read, upload/download media (20MB cap) |
 | `src/google-calendar.js` | Google Calendar OAuth2, event CRUD, two-way sync, transient retry on 5xx |
@@ -53,7 +53,7 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | `memory` | Conversation facts the bot remembers |
 | `expenses` | Spending tracker with categories |
 | `documents` | Stored files/PDFs with binary data |
-| `chat_history` | Persisted conversation history (200 msgs per chat) |
+| `chat_history` | Persisted conversation history, 60-day retention, `pgvector` embeddings for semantic recall |
 | `projects` | Task grouping by project |
 | `pins` | Pinned important messages |
 | `followups` | People/things you're waiting on with due dates |
@@ -85,11 +85,11 @@ Smart model selection: Haiku for simple intents, Sonnet for complex ones. Automa
 ## Conversation History
 
 - Stored in Postgres `chat_history` table — survives deploys
-- 200 messages (100 exchanges) retained per chat, auto-pruned
+- Retained 60 days per chat (safety cap of 5000 msgs/chat, rarely hit); auto-pruned by cleanup cron
 - Adaptive history sent to AI: 0 for simple commands, 10 for normal, 20 for context-dependent
 - Each message capped at 2000 chars
 - Richer context stored for non-chat intents (reminder text, expense amounts, etc.)
-- Chat history purged after 30 days by cleanup cron
+- **Semantic recall:** each message is embedded via Voyage AI (`voyage-3-lite`, 512-dim, `src/embeddings.js`) and stored in a `pgvector` column. On every non-trivial message, `getRelevantHistory()` (`src/db.js`) semantically searches the chat's older history (>1h old, ≥0.75 cosine similarity) and injects the top matches into the AI prompt via `formatRetrievedContext()` — implicit, no command needed (e.g. "what was that thing about the factory guy?" just works). Fully inert if `VOYAGE_API_KEY` is unset or Voyage is unreachable — never blocks or breaks the chat flow. Message text is sent to Voyage for embedding, in addition to Anthropic.
 
 ## Cron Jobs (both platforms)
 
@@ -120,8 +120,8 @@ Smart model selection: Haiku for simple intents, Sonnet for complex ones. Automa
 - **File size limits:** 20MB cap on media downloads before buffering
 - **Fetch timeouts:** All HTTP calls have AbortSignal.timeout (10-30s depending on operation)
 - **Process stability:** uncaughtException + unhandledRejection handlers, graceful SIGTERM/SIGINT shutdown with DB pool close
-- **Auto-cleanup:** Daily at 3am prunes stale reminders (30d), deactivated (90d), completed (6mo), chat history (30d), expenses (1yr)
-- **Haiku fallback:** If Haiku returns malformed JSON, automatically retries with Sonnet once instead of triggering 60s cooldown
+- **Auto-cleanup:** Daily at 3am prunes stale reminders (30d), deactivated (90d), completed (6mo), chat history (60d), expenses (1yr)
+- **Haiku fallback:** If Haiku returns malformed JSON, automatically retries with Sonnet once instead of triggering 10s cooldown
 
 ## Important Patterns
 
@@ -153,6 +153,7 @@ TIMEZONE=Asia/Amman
 GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET
 HEALTHCHECK_URL (optional — external dead-man's-switch ping target, e.g. healthchecks.io)
+VOYAGE_API_KEY (optional — enables chat-memory semantic recall; feature is fully inert if unset)
 ```
 
 ## Reliability & CI
@@ -160,7 +161,7 @@ HEALTHCHECK_URL (optional — external dead-man's-switch ping target, e.g. healt
 - **External heartbeat:** `src/monitor.js` `startHeartbeat()` pings `HEALTHCHECK_URL` every 2 min. If the process crashes/loops, pings stop and the external service (healthchecks.io) alerts the owner. No-op if unset.
 - **Internal self-check:** `startSelfCheck()` probes the DB every 5 min; after 2 consecutive failures it texts the owner (`WHATSAPP_TO_NUMBER`) via WhatsApp, with a 30-min cooldown, and sends a recovery note when the DB returns.
 - **Tests:** `npm test` runs `node --test test/*.test.js`. Pure-logic tests (`test/handlers.test.js`) always run; DB smoke tests (`test/db.test.js`) only run when `DATABASE_URL` is set.
-- **CI:** `.github/workflows/ci.yml` runs on push/PR against a **postgres:18** service container — catches PG18 type-coercion bugs that local SQLite never sees.
+- **CI:** `.github/workflows/ci.yml` runs on push/PR against a **`pgvector/pgvector:pg18`** service container (not the plain `postgres:18` image) — needed because chat-memory semantic recall requires the `pgvector` extension, which the official Postgres image doesn't bundle. Also catches PG18 type-coercion bugs that local SQLite never sees.
 
 ## User Preferences
 
