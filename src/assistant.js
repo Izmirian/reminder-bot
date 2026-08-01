@@ -751,6 +751,27 @@ export function orderRemindersForDisplay(reminders) {
 }
 
 /**
+ * Detect a compound "do X then show the list" request tacked onto an action
+ * ("cancel a and show the list", "set b done then show list again").
+ *
+ * Why it matters: letters are assigned fresh from the active list every turn.
+ * The moment an action removes/edits an item the letters re-shift, so if the
+ * user references the OLD letters next ("combine h g f") they no longer map.
+ * Honoring the follow-on re-renders the list so the user always sees — and can
+ * reference — current letters. Shared by both platforms + the test so the exact
+ * trigger phrasing stays in one place.
+ */
+export function wantsListAfterAction(text) {
+  if (!text) return false;
+  // A show/view verb somewhere before the word "list" ("show the list",
+  // "show me the updated list", "view the list") ...
+  const showThenList = /\b(?:show|see|view|display|send|pull\s*up|give\s*me|bring\s*up)\b[^]*?\blist\b/i.test(text);
+  // ... or an explicit "list again/now" tacked on the end.
+  const listAgain = /\blist\s+(?:again|now)\b/i.test(text);
+  return showThenList || listAgain;
+}
+
+/**
  * Check for conflicts near a given time.
  */
 export async function checkConflicts(chatId, remindAt) {

@@ -36,7 +36,7 @@ import {
   handleMemoryIntent, handleExpenseIntent, handleTimerIntent, handleSummarizeIntent,
   buildDashboard, handleProjectIntent, handlePinIntent, handleFollowupIntent,
   handleResearchIntent, handleEmailIntent, handleUndo as universalUndo, checkConflicts,
-  orderRemindersForDisplay,
+  orderRemindersForDisplay, wantsListAfterAction,
 } from './assistant.js';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -81,6 +81,14 @@ console.log('🤖 Telegram Reminder bot is running...');
 
 // Track AI clarification follow-ups
 const pendingClarification = new Map(); // chatId -> { originalText }
+
+// Send an action confirmation, then re-render the list when the user asked for
+// it in the same breath ("cancel a and show the list"). Re-rendering surfaces
+// the freshly re-lettered list so the next letter reference resolves correctly.
+async function confirmActionAndMaybeList(msg, chatId, confirmText, wantsList) {
+  await bot.sendMessage(chatId, confirmText);
+  if (wantsList) await handleList(bot, msg);
+}
 
 // --- Command handlers ---
 
@@ -749,6 +757,9 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, `🤔 ${aiResult.needsInfo}`);
         return;
       }
+      // "cancel a and show the list" — re-render after the action so the user
+      // sees the re-lettered list instead of referencing now-stale letters.
+      const wantsListAfter = wantsListAfterAction(text);
       const ids = aiResult.ids || [];
       if (aiResult.action === 'cancel') {
         const isBulkRequest = (/\b(all|everything|both)\b/i.test(text) || /\bevery\s+(reminder|one|single|task)\b/i.test(text));
@@ -776,8 +787,8 @@ bot.on('message', async (msg) => {
           bot.sendMessage(chatId, `Couldn't find those reminders. Active:\n${activeReminders.map(r => `  • ${r.text}`).join('\n') || '  (none)'}`);
           return;
         }
-        if (names.length === 1) bot.sendMessage(chatId, `❌ Cancelled "${names[0]}"`);
-        else bot.sendMessage(chatId, `❌ Cancelled ${names.length} reminders:\n${names.map(n => `  • ${n}`).join('\n')}`);
+        if (names.length === 1) await confirmActionAndMaybeList(msg, chatId, `❌ Cancelled "${names[0]}"`, wantsListAfter);
+        else await confirmActionAndMaybeList(msg, chatId, `❌ Cancelled ${names.length} reminders:\n${names.map(n => `  • ${n}`).join('\n')}`, wantsListAfter);
         return;
       }
       if (aiResult.action === 'reschedule') {
@@ -800,7 +811,7 @@ bot.on('message', async (msg) => {
             }
           }
           if (results.length > 0) {
-            bot.sendMessage(chatId, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`);
+            await confirmActionAndMaybeList(msg, chatId, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`, wantsListAfter);
           } else {
             bot.sendMessage(chatId, "Couldn't find those reminders to reschedule.");
           }
@@ -822,7 +833,7 @@ bot.on('message', async (msg) => {
           }
         }
         if (results.length > 0) {
-          bot.sendMessage(chatId, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`);
+          await confirmActionAndMaybeList(msg, chatId, `✅ Rescheduled:\n${results.map(r => `  • ${r}`).join('\n')}`, wantsListAfter);
         } else {
           bot.sendMessage(chatId, "Couldn't find those reminders to reschedule.");
         }
@@ -850,8 +861,8 @@ bot.on('message', async (msg) => {
           bot.sendMessage(chatId, `Couldn't find those reminders to edit. Active:\n${activeReminders.map(r => `  • ${r.text}`).join('\n') || '  (none)'}`);
           return;
         }
-        if (updated.length === 1) bot.sendMessage(chatId, `✅ Updated "${updated[0]}" → "${aiResult.newText}"`);
-        else bot.sendMessage(chatId, `✅ Updated ${updated.length} reminders to "${aiResult.newText}"`);
+        if (updated.length === 1) await confirmActionAndMaybeList(msg, chatId, `✅ Updated "${updated[0]}" → "${aiResult.newText}"`, wantsListAfter);
+        else await confirmActionAndMaybeList(msg, chatId, `✅ Updated ${updated.length} reminders to "${aiResult.newText}"`, wantsListAfter);
         return;
       }
       if (aiResult.action === 'add_note') {
@@ -875,7 +886,7 @@ bot.on('message', async (msg) => {
           bot.sendMessage(chatId, "Couldn't find those reminders to add a note to.");
           return;
         }
-        bot.sendMessage(chatId, `📝 Note added to ${noted.length === 1 ? `"${noted[0]}"` : `${noted.length} reminders`}: ${aiResult.note}`);
+        await confirmActionAndMaybeList(msg, chatId, `📝 Note added to ${noted.length === 1 ? `"${noted[0]}"` : `${noted.length} reminders`}: ${aiResult.note}`, wantsListAfter);
         return;
       }
 
@@ -912,8 +923,8 @@ bot.on('message', async (msg) => {
           }
           return;
         }
-        if (completed.length === 1) bot.sendMessage(chatId, `✅ Done: "${completed[0]}"`);
-        else bot.sendMessage(chatId, `✅ Marked ${completed.length} as done:\n${completed.map(t => `  • ${t}`).join('\n')}`);
+        if (completed.length === 1) await confirmActionAndMaybeList(msg, chatId, `✅ Done: "${completed[0]}"`, wantsListAfter);
+        else await confirmActionAndMaybeList(msg, chatId, `✅ Marked ${completed.length} as done:\n${completed.map(t => `  • ${t}`).join('\n')}`, wantsListAfter);
         return;
       }
     }
