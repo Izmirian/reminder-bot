@@ -35,6 +35,11 @@ export const CONFIG = {
   URGENT_REFIRE_INTERVAL: 5,         // Minutes between urgent reminder re-fires
   URGENT_REFIRE_MAX: 3,              // Max re-fires for urgent reminders
   MISSED_CHECK_INTERVAL: 2,          // Minutes between missed reminder checks
+  MISSED_STALE_HOURS: 6,             // Overdue longer than this → folded into one catch-up digest instead of fired individually
+  MISSED_MAX_PER_TICK: 5,            // Max missed reminders re-fired per check (spreads the burst after an outage)
+
+  // WhatsApp send health (fatal config/auth failures — see src/wa-health.js)
+  SEND_ALERT_COOLDOWN_HOURS: 6,      // Re-assert an ongoing incident at most this often
 
   // Cleanup retention
   STALE_REMINDER_DAYS: 30,           // Auto-deactivate one-off reminders after N days

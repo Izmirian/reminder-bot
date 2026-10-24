@@ -2,6 +2,7 @@
  * WhatsApp Cloud API client — sends messages via Meta's Graph API.
  */
 import { CONFIG } from '../config.js';
+import { classifyGraphError, reportSendFailure, reportSendSuccess } from '../wa-health.js';
 
 const API_VERSION = 'v22.0';
 const BASE_URL = `https://graph.facebook.com/${API_VERSION}`;
@@ -38,6 +39,27 @@ async function fetchWithRetry(url, options, retries = 3) {
 }
 
 /**
+ * Common tail of every message send: record success (closes any open incident),
+ * or classify the Graph error, feed the send-health tracker, and throw. The
+ * message format is unchanged; the error gains .status/.waCode/.waKind so
+ * callers (the reminder scheduler) can tell fatal/transient/permanent apart.
+ */
+async function ensureSent(res) {
+  if (res.ok) {
+    reportSendSuccess();
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  const info = classifyGraphError(res.status, body);
+  reportSendFailure(info);
+  const err = new Error(`WhatsApp API error ${res.status}: ${JSON.stringify(body)}`);
+  err.status = res.status;
+  err.waCode = info.code;
+  err.waKind = info.kind;
+  throw err;
+}
+
+/**
  * Mark a message as read (shows blue ticks).
  */
 export async function markAsRead(messageId) {
@@ -62,10 +84,7 @@ export async function sendTextMessage(to, text) {
     body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: text } }),
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`WhatsApp API error ${res.status}: ${JSON.stringify(err)}`);
-  }
+  await ensureSent(res);
   return res.json();
 }
 
@@ -86,10 +105,7 @@ export async function sendButtonMessage(to, bodyText, buttons) {
     }),
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`WhatsApp API error ${res.status}: ${JSON.stringify(err)}`);
-  }
+  await ensureSent(res);
   return res.json();
 }
 
@@ -151,10 +167,7 @@ export async function sendImageMessage(to, imageId, caption) {
     body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'image', image: { id: imageId, caption: caption || '' } }),
   });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`WhatsApp API error ${res.status}: ${JSON.stringify(err)}`);
-  }
+  await ensureSent(res);
   return res.json();
 }
 
