@@ -30,7 +30,8 @@ A dual-platform (Telegram + WhatsApp) AI-powered personal assistant deployed on 
 | `src/whatsapp/api.js` | WhatsApp Cloud API client — fetchWithRetry (exponential backoff), send text/buttons/images, mark read, upload/download media (20MB cap) |
 | `src/google-calendar.js` | Google Calendar OAuth2, event CRUD, two-way sync, transient retry on 5xx |
 | `src/url-monitor.js` | URL change/price monitoring with content hashing |
-| `src/monitor.js` | Reliability monitoring — external heartbeat (HEALTHCHECK_URL) + internal DB self-check that alerts owner via WhatsApp |
+| `src/monitor.js` | Reliability monitoring — external heartbeat (HEALTHCHECK_URL) + internal DB self-check that alerts owner via WhatsApp + routes fatal WhatsApp send failures to the healthcheck as `/fail` (not via WhatsApp) |
+| `src/wa-health.js` | WhatsApp send health — Graph error classification (fatal/transient/permanent), incident tracker (one alert + cooldown + recovery), missed-reminder planner (rate-limit + stale digest) |
 | `src/quiet.js` | Quiet hours — `isQuietNow`/`quietRemainingMs`/`parseQuietSpec`; non-urgent reminders held during the window, deferred via `fireReminder` gate in both schedulers |
 | `src/parser.js` | chrono-node fallback date parser with `looksLikeReminder()` gate |
 | `src/commands.js` | Telegram slash command handlers |
@@ -95,7 +96,7 @@ Smart model selection: Haiku for simple intents, Sonnet for complex ones. Automa
 
 | Schedule | Job |
 |----------|-----|
-| `*/2 * * * *` | Missed reminder safety net — fires unfired past-due reminders |
+| `*/2 * * * *` | Missed reminder safety net — fires unfired past-due reminders (WhatsApp: ≤5 per run, 1 probe while a send incident is open, anything overdue >6h is folded into one catch-up message) |
 | `*/15 * * * *` | Google Calendar sync — polls for new events |
 | `*/30 * * * *` | URL monitor check — content hash comparison |
 | `0 */6 * * *` | Ignored reminder alerts + follow-up due notifications |
@@ -159,6 +160,8 @@ VOYAGE_API_KEY (optional — enables chat-memory semantic recall; feature is ful
 ## Reliability & CI
 
 - **External heartbeat:** `src/monitor.js` `startHeartbeat()` pings `HEALTHCHECK_URL` every 2 min. If the process crashes/loops, pings stop and the external service (healthchecks.io) alerts the owner. No-op if unset.
+- **WhatsApp send-failure alerts:** `src/whatsapp/api.js` classifies every failed Graph send (`src/wa-health.js`). A *fatal* config/auth error (e.g. `133010` number not registered, `190` token expired) opens an incident: one `[ALERT]` log line plus a `POST <HEALTHCHECK_URL>/fail`, and the success heartbeat is withheld while the incident is open so the check stays down (re-asserted at most every 6h). The first successful send closes it and resumes the heartbeat (healthchecks.io sends the "up" notice). Independent of WhatsApp by design. Incident state is in-memory: a restart during an outage resets it until the next failed send re-opens it.
+- **Failed sends are retried, not dropped:** a one-off reminder whose send fails (fatal/transient/unknown error) stays active + unfired so the 2-min missed check retries it; only a permanent per-message failure (e.g. recipient not allowed) is retired. Before this, `_fireReminder` swallowed the error and then deactivated the reminder.
 - **Internal self-check:** `startSelfCheck()` probes the DB every 5 min; after 2 consecutive failures it texts the owner (`WHATSAPP_TO_NUMBER`) via WhatsApp, with a 30-min cooldown, and sends a recovery note when the DB returns.
 - **Tests:** `npm test` runs `node --test test/*.test.js`. Pure-logic tests (`test/handlers.test.js`) always run; DB smoke tests (`test/db.test.js`) only run when `DATABASE_URL` is set.
 - **CI:** `.github/workflows/ci.yml` runs on push/PR against a **`pgvector/pgvector:pg18`** service container (not the plain `postgres:18` image) — needed because chat-memory semantic recall requires the `pgvector` extension, which the official Postgres image doesn't bundle. Also catches PG18 type-coercion bugs that local SQLite never sees.

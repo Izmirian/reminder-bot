@@ -17,6 +17,8 @@ import {
   getStreak,
 } from '../db.js';
 import { buildContextualMessage } from '../context.js';
+import { CONFIG } from '../config.js';
+import { isRetryableSendError, isSendIncidentActive, planMissedReminders, buildMissedDigest } from '../wa-health.js';
 
 const activeJobs = new Map();
 
@@ -53,6 +55,8 @@ async function fireReminder(reminder) {
 
 async function _fireReminder(reminder) {
   let contextMsg = ''; // hoisted so the shared-recipients block (after the catch) can use it
+  let sent = false;    // the WhatsApp send itself succeeded (markReminderFired may still fail after it)
+  let sendErr = null;
   try {
     const settings = await getSettings(reminder.chat_id);
 
@@ -108,12 +112,26 @@ async function _fireReminder(reminder) {
     } else {
       apiResult = await sendReminderMessage(reminder.chat_id, contextMsg, reminder.id, reminder.snooze_count || 0);
     }
+    sent = true;
     // Track message ID for reply-to feature
     const wamid = apiResult?.messages?.[0]?.id;
     if (wamid) addToWaMessageMap(wamid, reminder.id);
     await markReminderFired(reminder.id);
   } catch (err) {
     console.error(`[WhatsApp] Failed to send reminder ${reminder.id}:`, err.message);
+    sendErr = err;
+  }
+
+  // A one-off that was NOT delivered must stay active + unfired so the every-2-min
+  // missed-reminder check retries it. Falling through would deactivate it below and
+  // silently lose it (this is what dropped reminders during the 2026-10-24 outage).
+  // Shared-recipient and urgent re-fire steps are skipped too: the retry redoes them,
+  // so running them now would duplicate. A permanent per-message failure (e.g. bad
+  // recipient) is still dropped as before — retrying it forever helps nobody.
+  if (!sent && sendErr && !reminder.cron_expr && isRetryableSendError(sendErr)) {
+    console.warn(`[WhatsApp] Reminder ${reminder.id} kept active for retry (${sendErr.waKind || 'error'})`);
+    activeJobs.delete(reminder.id);
+    return;
   }
 
   // Send to shared recipients
@@ -234,9 +252,7 @@ export async function loadWhatsAppReminders() {
       scheduled++;
     } else {
       if (new Date(reminder.remind_at) <= new Date()) {
-        await markReminderFired(reminder.id);
-        fireReminder(reminder);
-        pastDue++;
+        pastDue++; // handled by the missed-reminder check below (rate-limited, stale ones digested)
       } else {
         scheduleReminder(reminder);
         scheduled++;
@@ -244,7 +260,69 @@ export async function loadWhatsAppReminders() {
     }
   }
 
-  console.log(`[WhatsApp] Loaded ${scheduled} reminders, ${pastDue} fired immediately`);
+  console.log(`[WhatsApp] Loaded ${scheduled} reminders, ${pastDue} past due`);
+  if (pastDue > 0) {
+    // Not awaited: sends can take a while and must not hold up startup.
+    runWhatsAppMissedCheck().catch(err => console.error('[WA Missed Check] Error:', err.message));
+  }
+}
+
+/**
+ * Deliver past-due, never-fired one-off reminders (startup + every 2 min).
+ * Recent ones fire individually (rate-limited; a single probe while WhatsApp
+ * sending is known-broken); ones overdue by more than MISSED_STALE_HOURS are
+ * folded into one catch-up message so a long outage can't flood the chat.
+ */
+export async function runWhatsAppMissedCheck() {
+  const { getMissedReminders } = await import('../db.js');
+  const missed = await getMissedReminders();
+  // Only WhatsApp reminders (phone number chat IDs)
+  const waMissed = missed.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id));
+  const { fire, digest } = planMissedReminders(waMissed, {
+    staleMs: CONFIG.MISSED_STALE_HOURS * 3600 * 1000,
+    maxPerTick: CONFIG.MISSED_MAX_PER_TICK,
+    incidentActive: isSendIncidentActive(),
+  });
+  for (const reminder of fire) {
+    console.log(`[WA Missed Check] Firing missed reminder ${reminder.id}: "${reminder.text}"`);
+    fireReminder(reminder);
+  }
+  if (digest.length > 0) await sendMissedDigests(digest);
+}
+
+async function sendMissedDigests(items) {
+  const byChat = new Map();
+  for (const r of items) {
+    if (firingNow.has(r.id)) continue; // a previous (slow) check is still sending this one
+    if (!byChat.has(r.chat_id)) byChat.set(r.chat_id, []);
+    byChat.get(r.chat_id).push(r);
+  }
+  for (const [chatId, list] of byChat) {
+    list.forEach(r => firingNow.add(r.id));
+    try {
+      let retire = true;
+      try {
+        const settings = await getSettings(chatId);
+        const { isQuietNow } = await import('../quiet.js');
+        if (isQuietNow(settings) && !list.some(r => r.priority === 'urgent')) continue; // hold until quiet-end
+        console.log(`[WA Missed Check] Sending catch-up digest of ${list.length} stale reminder(s) to ${chatId}`);
+        await sendTextMessage(chatId, buildMissedDigest(list, settings.timezone));
+      } catch (err) {
+        console.error(`[WA Missed Digest] Failed for ${chatId}:`, err.message);
+        // Account/transient trouble: keep them for the next check. A permanent
+        // failure can't be fixed by retrying, so retire them as before.
+        retire = !isRetryableSendError(err);
+      }
+      if (retire) {
+        for (const r of list) {
+          await markReminderFired(r.id);
+          await deactivateReminder(r.id);
+        }
+      }
+    } finally {
+      list.forEach(r => firingNow.delete(r.id));
+    }
+  }
 }
 
 // Fetch weather from wttr.in (free, no API key)
@@ -323,14 +401,7 @@ export function setupWhatsAppDigest() {
   // Catch missed reminders every 2 minutes — fires any past-due reminders that were never sent
   cron.schedule('*/2 * * * *', async () => {
     try {
-      const { getMissedReminders } = await import('../db.js');
-      const missed = await getMissedReminders();
-      // Only fire WhatsApp reminders (phone number chat IDs)
-      const waMissed = missed.filter(r => r.chat_id.length >= 10 && /^\d+$/.test(r.chat_id));
-      for (const reminder of waMissed) {
-        console.log(`[WA Missed Check] Firing missed reminder ${reminder.id}: "${reminder.text}"`);
-        fireReminder(reminder);
-      }
+      await runWhatsAppMissedCheck();
     } catch (err) {
       console.error('[WA Missed Check] Error:', err.message);
     }

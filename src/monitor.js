@@ -9,9 +9,18 @@
  *     and alerts the owner (over WhatsApp) when it's unreachable. Catches the
  *     "alive but broken" case. Sends a recovery note when it comes back.
  *
- * Both are no-ops if their required env vars are unset, so the bot runs fine
- * locally without any monitoring configured.
+ *  3. startSendHealthAlerts() — WhatsApp send failures that need a human (number
+ *     deregistered, token expired — see src/wa-health.js) are reported through the
+ *     SAME external healthchecks.io check, NOT through WhatsApp (which is exactly
+ *     what is broken). On the first fatal failure we ping `<HEALTHCHECK_URL>/fail`
+ *     and stop sending the success heartbeat while the incident is open, so the
+ *     check stays down (one alert per incident; healthchecks.io owns dedupe and
+ *     the recovery notice). The first successful send resumes the heartbeat.
+ *
+ * All layers are no-ops if their required env vars are unset, so the bot runs
+ * fine locally without any monitoring configured.
  */
+import { setSendHealthListener, isSendIncidentActive } from './wa-health.js';
 
 const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;  // 2 min
 const SELFCHECK_INTERVAL_MS = 5 * 60 * 1000;  // 5 min
@@ -23,26 +32,68 @@ let dbInIncident = false;
 let lastAlertAt = 0;
 
 /**
+ * Build the healthchecks.io URL for a success ('ok') or explicit failure
+ * ('fail') signal from the configured ping URL. Handles uuid and slug forms,
+ * trailing slashes and query strings. Returns null if unset/invalid.
+ * (Never log the result — the ping URL is a credential.)
+ */
+export function healthcheckPingUrl(base, kind = 'ok') {
+  if (!base) return null;
+  let u;
+  try { u = new URL(base); } catch { return null; }
+  if (kind === 'fail') u.pathname = u.pathname.replace(/\/+$/, '') + '/fail';
+  return u.toString();
+}
+
+async function pingHealthcheck(kind, body) {
+  const url = healthcheckPingUrl(process.env.HEALTHCHECK_URL, kind);
+  if (!url) return;
+  try {
+    await fetch(url, { method: body ? 'POST' : 'GET', body: body || undefined, signal: AbortSignal.timeout(10000) });
+  } catch (err) {
+    // A failed ping just means this beat is missed; the external service
+    // handles the alerting. Never let it crash the process, never log the URL.
+    console.warn(`[Monitor] Healthcheck ${kind} ping failed:`, err.message);
+  }
+}
+
+/**
  * Ping the external dead-man's-switch. Safe to call with no env configured.
  */
 export function startHeartbeat() {
-  const url = process.env.HEALTHCHECK_URL;
-  if (!url) {
+  if (!process.env.HEALTHCHECK_URL) {
     console.log('[Monitor] HEALTHCHECK_URL not set — external heartbeat disabled.');
     return;
   }
   const ping = async () => {
-    try {
-      await fetch(url, { method: 'GET', signal: AbortSignal.timeout(10000) });
-    } catch (err) {
-      // A failed ping just means this beat is missed; the external service
-      // handles the alerting. Never let it crash the process.
-      console.warn('[Monitor] Heartbeat ping failed:', err.message);
-    }
+    // While a fatal WhatsApp send incident is open, withhold the success beat:
+    // it would flip the check back to "up" and mask the incident.
+    if (isSendIncidentActive()) return;
+    await pingHealthcheck('ok');
+    // Narrow race: the incident opened while that ping was in flight.
+    if (isSendIncidentActive()) await pingHealthcheck('fail', 'WhatsApp send incident active');
   };
   ping(); // immediate first beat
   setInterval(ping, HEARTBEAT_INTERVAL_MS);
   console.log('[Monitor] External heartbeat started (every 2 min).');
+}
+
+/**
+ * Route fatal WhatsApp send failures to the external healthcheck (see header).
+ * wa-health.js already logs a loud [ALERT] line, so with no HEALTHCHECK_URL the
+ * incident is still visible in the Railway logs, just not pushed anywhere.
+ */
+export function startSendHealthAlerts() {
+  if (!process.env.HEALTHCHECK_URL) {
+    console.log('[Monitor] HEALTHCHECK_URL not set — WhatsApp send failures will only be logged.');
+    return;
+  }
+  setSendHealthListener({
+    onAlert: (info) => pingHealthcheck('fail',
+      `WhatsApp sends failing (fatal): ${info.reason}. ${info.failures} failed send(s) since ${new Date(info.since).toISOString()}.`),
+    onRecover: () => pingHealthcheck('ok'),
+  });
+  console.log('[Monitor] WhatsApp send-failure alerts routed to the external healthcheck.');
 }
 
 /**

@@ -26,10 +26,11 @@ if (missing.length > 0) {
 }
 
 // Reliability monitoring — external heartbeat + internal DB self-check.
-// Both no-op if their env vars (HEALTHCHECK_URL / WHATSAPP_TO_NUMBER) are unset.
-import('./src/monitor.js').then(({ startHeartbeat, startSelfCheck }) => {
+// All no-op if their env vars (HEALTHCHECK_URL / WHATSAPP_TO_NUMBER) are unset.
+import('./src/monitor.js').then(({ startHeartbeat, startSelfCheck, startSendHealthAlerts }) => {
   startHeartbeat();
   startSelfCheck();
+  startSendHealthAlerts();
 }).catch(e => console.error('[Startup] Monitor failed to start:', e.message));
 
 // Graceful shutdown — Railway sends SIGTERM before killing
